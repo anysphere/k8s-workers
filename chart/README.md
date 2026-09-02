@@ -1,5 +1,8 @@
 # k8s-workers Helm Chart
 
+Step-by-step install, any-repo vs repo-bound, and claim vs warm-idle modes:
+see the root [README.md](../README.md).
+
 Deploys an in-cluster `agent worker controller` that kubectl-creates Cursor
 self-hosted **pool** workers as vanilla Kubernetes **Pods**. There is no custom
 operator, no `WorkerDeployment` CRD, no HPA, and no scaler that patches
@@ -7,10 +10,10 @@ Deployment replica counts.
 
 This chart is **additive** to the published operator path. The published path remains:
 
-1. Install [`worker-set-controller-chart`](../https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes).
+1. Install [`worker-set-controller-chart`](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes).
 2. Apply `WorkerDeployment` resources.
 
-Do not uninstall the operator unless you intend to run this experiment.
+Do not uninstall the operator unless you intend to run only this controller path.
 
 ## What this installs
 
@@ -43,7 +46,7 @@ kubectl create secret generic cursor-workers-api-key \
   --from-literal=api-key='YOUR_SERVICE_ACCOUNT_API_KEY' \
   -n cursord
 
-helm upgrade --install my-workers ./k8s-workers/chart \
+helm upgrade --install my-workers ./chart \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -55,7 +58,7 @@ helm upgrade --install my-workers ./k8s-workers/chart \
 ### Chart-managed Secret
 
 ```bash
-helm upgrade --install my-workers ./k8s-workers/chart \
+helm upgrade --install my-workers ./chart \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -68,7 +71,7 @@ Do not commit `auth.apiKey`. Prefer `--set` or a gitignored values overlay.
 Render without installing:
 
 ```bash
-helm template my-workers ./k8s-workers/chart \
+helm template my-workers ./chart \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=sample \
   --set auth.existingSecret=cursor-workers-api-key
@@ -173,5 +176,5 @@ The controller process does not serve these endpoints.
 ## Validate locally
 
 ```bash
-./k8s-workers/scripts/helm-validate.sh
+./scripts/helm-validate.sh
 ```
