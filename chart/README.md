@@ -7,7 +7,7 @@ Deployment replica counts.
 
 This is an **additive PoC**. The published path remains:
 
-1. Install [`worker-set-controller-chart`](../../worker-set-controller/chart/README.md).
+1. Install [`worker-set-controller-chart`](../https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes).
 2. Apply `WorkerDeployment` resources.
 
 Do not uninstall the operator unless you intend to run this experiment.
