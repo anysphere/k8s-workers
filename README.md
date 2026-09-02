@@ -5,11 +5,10 @@ your cluster. Cursor hosts the agent loop. An in-cluster
 `agent worker controller` kubectl-creates one worker Pod per spawn; each
 worker runs tool calls inside your cluster network.
 
-This chart does **not** install the published `worker-set-controller` /
-`WorkerDeployment` operator. Use
-[Deploying with Kubernetes](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes)
-for that path. Keep this sample if you want controller `--spawn` Pods
-(claim-then-spawn or `--warm-idle`) without a CRD.
+For the published `worker-set-controller` / `WorkerDeployment` path, see
+[Deploying with Kubernetes](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes).
+Use this sample for controller `--spawn` Pods (claim-then-spawn or
+`--warm-idle`) without a CRD.
 
 ## How it works
 
@@ -23,17 +22,17 @@ for that path. Keep this sample if you want controller `--spawn` Pods
    `agent worker --pool <name> --worker-dir <dir> start`.
 4. The worker opens an outbound bridge to Cursor and executes tool calls in
    your cluster. When `--idle-release-timeout` elapses after the session, the
-   worker exits 0 and the Pod becomes **Succeeded** (not restarted).
+   worker exits 0 and the Pod becomes **Succeeded**.
 
 ## Key properties
 
 | Property | Description |
 | --- | --- |
-| Controller + spawn | One controller process; workers are kubectl-created Pods, not a worker Deployment |
+| Controller + spawn | One controller process; workers are kubectl-created Pods |
 | One-shot Pods | `restartPolicy: Never` — idle exit completes the Pod; next spawn creates a new one |
 | Claim or warm | `controller.warmIdle=0` claim-then-spawn, or `>0` for `--warm-idle N` |
-| Service account key | Long-lived `CURSOR_API_KEY` from a Secret (not operator token rotation) |
-| Additive | Does not remove or replace `worker-set-controller` / `WorkerDeployment` |
+| Service account key | Long-lived `CURSOR_API_KEY` from a Secret |
+| Additive | Safe to run alongside `worker-set-controller` / `WorkerDeployment` |
 
 ## Pool and repo modes
 
@@ -47,17 +46,17 @@ remote when one exists.
 
 **This template’s default:** `pool: default` on the controller and every
 spawned worker. Build your worker image so `/workspace` (or `workerDir`) is
-either a clone with a remote (repo-bound) or a directory with **no** git
-remote (any-repo). Keep Helm `pool` and the dashboard pool name the same.
+either a clone with a remote (repo-bound) or a directory without a git remote
+(any-repo). Keep Helm `pool` and the dashboard pool name the same.
 
 ### Any-repo mode
 
 Dashboard: **Any repo**. Docs:
 [repo-less pools](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#repo-less-pools).
-Routing is by **pool name**, not by git remote. Users must specify the pool
-when starting an agent: the dashboard **Any repo** group, `pool=<name>` on
-Slack/GitHub/Linear, or the API with `env.type: "pool"` and `env.name`,
-omitting `repos`. Those starts omit `repo=` labels.
+Routing is by **pool name**. Users specify the pool when starting an agent:
+the dashboard **Any repo** group, `pool=<name>` on Slack/GitHub/Linear, or the
+API with `env.type: "pool"` and `env.name`, omitting `repos`. Those starts
+leave off `repo=` labels.
 
 Controller (what Helm runs):
 
@@ -65,10 +64,8 @@ Controller (what Helm runs):
 agent worker controller --spawn /hooks/spawn-pod.sh --pool <name>
 ```
 
-Repeat `--pool` only if you run multiple controller releases (one chart
-install per pool is the usual pattern). `--all-pools` is not the right
-default for a dedicated any-repo fleet; set `controller` values per release
-instead.
+One chart install per pool is the usual pattern. Repeat `--pool` only when a
+single controller should serve several pools.
 
 Worker Pod (spawned by the hook):
 
@@ -76,19 +73,19 @@ Worker Pod (spawned by the hook):
 agent worker --pool <name> --worker-dir /workspace start
 ```
 
-`/workspace` must have **no git remote**, so the worker omits `repo=` labels.
-`--pool` on the guest must match the controller pool name.
+`/workspace` should have no git remote so the worker leaves off `repo=`
+labels. `--pool` on the guest must match the controller pool name.
 
 Optional: if a pending request carries a clone URL and your image/entrypoint
-clones it into `--worker-dir`, **that session becomes repo-bound**. To stay
-any-repo, keep `--worker-dir` as a directory with no git remote and let the
+clones it into `--worker-dir`, that session becomes repo-bound. To stay
+any-repo, keep `--worker-dir` as a directory without a git remote and let the
 agent or your scripts clone into it.
 
 ### Repo-bound mode
 
 Routing is by **git remote**. Bake (or init-container clone) a repository
 into `workerDir` with a configured remote. The worker derives `repo=owner/name`
-from that remote. Do not set `repo=` labels by hand.
+from that remote (leave `repo=` labels unset; the worker sets them).
 
 Users pick that repository in the dashboard (the pool appears under that
 repo). Replace any public sample remote with your real repository before you
@@ -105,22 +102,22 @@ Independent of any-repo vs repo-bound.
 ### Claim-then-spawn (`controller.warmIdle=0`, default)
 
 The controller watches pending pool requests, claims each one, and runs
-`--spawn` once per claim. No worker Pods run until there is demand. Closest
-to the Cloudflare / Lambda “spawn on claim” templates.
+`--spawn` once per claim. Worker Pods appear when there is demand. Closest to
+the Cloudflare / Lambda “spawn on claim” templates.
 
 ### Warm idle (`controller.warmIdle > 0`)
 
 Passed through as `agent worker controller --warm-idle <count>`. The
-controller does not claim for capacity; it keeps `<count>` idle workers
-connected in `pool` by running the spawn hook once per missing warm worker.
-It does **not** patch a Deployment or HPA.
+controller keeps `<count>` idle workers connected in `pool` by running the
+spawn hook once per missing warm worker (new Pods each time, rather than
+patching a Deployment or HPA).
 
 When a session finishes and the worker exits, that Pod completes. The next
 warm reconcile sees idle below target and spawns again.
 
 Run **one** warm controller per pool. Two concurrent warm controllers can
 transiently over-spawn. This chart uses `strategy: Recreate` on the
-controller Deployment so a rollout is not two controllers at once.
+controller Deployment so a rollout keeps a single controller.
 
 ## Prerequisites
 
@@ -180,8 +177,8 @@ controller Deployment so a rollout is not two controllers at once.
      --set auth.existingSecret=cursor-workers-api-key
    ```
 
-   Chart-managed Secret (avoid committing the key; prefer `--set` or a
-   gitignored values overlay):
+   Chart-managed Secret (prefer `--set` or a gitignored values overlay over
+   committing the key):
 
    ```bash
    helm upgrade --install my-workers ./chart \
@@ -286,17 +283,17 @@ Worker health (same contract as the public Kubernetes guide):
 
 | Endpoint | 200 | 503 |
 | --- | --- | --- |
-| `/healthz` | Process is running | Never |
+| `/healthz` | Process is running | — |
 | `/readyz` | Connected and idle | Starting, or running a session |
 
-The controller process does not serve these endpoints.
+Only worker Pods serve these endpoints.
 
 ## Troubleshooting
 
 | Symptom | What to check |
 | --- | --- |
 | Nothing is ever claimed | Controller logs; `CURSOR_API_KEY` Secret; `pool` matches the dashboard; Self-Hosted enabled for the team |
-| `HTTP 401` / invalid API key | Use a **service account** key with agent scope, not a personal key. Do not point workers at the IDE-only API host |
+| `HTTP 401` / invalid API key | Use a **service account** key with agent scope, not a personal key. Point workers at the public private-worker API host |
 | Pods spawn then exit immediately | Image has `agent` + `git`; `workerDir` exists; `CURSOR_API_ENDPOINT` / `CURSOR_API_URL` copied into the worker Pod (see spawn hook); check worker logs |
 | Agent cannot find the pool under a repo | You started any-repo (no `repo=` labels). Pick **Any repo**, or bake a git remote for repo-bound |
 | Warm idle overshoots | Only one controller per pool; chart uses Recreate — avoid a second Helm release on the same pool with `warmIdle>0` |
@@ -308,7 +305,7 @@ The controller process does not serve these endpoints.
 | --- | --- |
 | `readyReplicas` = idle workers; busy-safe rolling updates | `--warm-idle` or claim-then-spawn; one-shot Pods |
 | Operator token exchange + `--auth-token-file` | Long-lived `CURSOR_API_KEY` Secret |
-| CRD + `worker-set-controller` | No CRD |
+| CRD + `worker-set-controller` | Vanilla Pods via `--spawn` |
 | Optional demand autoscaling / scale-to-zero | Claim-then-spawn (`warmIdle=0`) or fixed idle via `--warm-idle` |
 
 ## Related resources

@@ -4,39 +4,37 @@ Step-by-step install, any-repo vs repo-bound, and claim vs warm-idle modes:
 see the root [README.md](../README.md).
 
 Deploys an in-cluster `agent worker controller` that kubectl-creates Cursor
-self-hosted **pool** workers as vanilla Kubernetes **Pods**. There is no custom
-operator, no `WorkerDeployment` CRD, no HPA, and no scaler that patches
-Deployment replica counts.
+self-hosted **pool** workers as vanilla Kubernetes **Pods**.
 
-This chart is **additive** to the published operator path. The published path remains:
+This chart is **additive** to the published operator path:
 
 1. Install [`worker-set-controller-chart`](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes).
 2. Apply `WorkerDeployment` resources.
 
-Do not uninstall the operator unless you intend to run only this controller path.
+Keep the operator installed if you still need that path.
 
 ## What this installs
 
 | Resource | When | Description |
 |----------|------|-------------|
-| Deployment (1 replica) | `controller.enabled` | `agent worker controller --spawn …` (the controller process, not workers) |
+| Deployment (1 replica) | `controller.enabled` | `agent worker controller --spawn …` (the controller process) |
 | ConfigMap | `controller.enabled` | Spawn hook that `kubectl create`s one worker Pod |
 | Role / RoleBinding | `controller.enabled` and `rbac.create` | Namespace permission to create/get/list Pods |
 | ServiceAccount | `serviceAccount.create` | Controller SA; token automount on (required for kubectl) |
 | Secret | `auth.apiKey` set and `auth.existingSecret` empty | Holds `CURSOR_API_KEY` |
 
-Worker **instances** are not in the Helm release. Each `--spawn` creates a Pod
+Worker **instances** are outside the Helm release. Each `--spawn` creates a Pod
 with `restartPolicy: Never`. Workers authenticate with a team **service account
-API key** (`CURSOR_API_KEY`). The operator's short-lived `--auth-token-file`
-rotation is out of scope.
+API key** (`CURSOR_API_KEY`).
 
 The controller image must include the `agent` CLI **and** `kubectl` on `PATH`.
 Override `controller.image` when the worker image has `agent` but not `kubectl`.
 
 ## Quick start
 
-Your worker image must include the `agent` CLI, `git` on `PATH`, and a cloned
-repository (see the [Kubernetes self-hosted guide](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes.md)).
+Your worker image must include the `agent` CLI, `git` on `PATH`, and a
+workspace at `workerDir` (see the
+[Kubernetes self-hosted guide](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes)).
 The controller container additionally needs `kubectl`.
 
 ### Existing Secret
@@ -66,7 +64,7 @@ helm upgrade --install my-workers ./chart \
   --set auth.apiKey='YOUR_SERVICE_ACCOUNT_API_KEY'
 ```
 
-Do not commit `auth.apiKey`. Prefer `--set` or a gitignored values overlay.
+Prefer `--set` or a gitignored values overlay over committing `auth.apiKey`.
 
 Render without installing:
 
@@ -79,43 +77,38 @@ helm template my-workers ./chart \
 
 ## How workers are created
 
-The controller Deployment is **one replica of the controller process**. It never
-changes a worker replica count.
+The controller Deployment is **one replica of the controller process**.
 
 On each `--spawn` (claim-then-spawn, or once per missing warm worker) the hook
 runs `kubectl create -f -` with a Pod spec:
 
 1. `restartPolicy: Never` — when `--idle-release-timeout` exits 0, the Pod is
-   **Succeeded**. kubelet does not restart it and there is no ReplicaSet to
-   replace it.
+   **Succeeded**.
 2. The worker registers with `CURSOR_AGENT_WORKER_ID` from the hook env (the
    id the controller claimed or generated).
-3. `CURSOR_API_KEY` is mounted from the same Secret; the worker Pod does **not**
-   mount the controller ServiceAccount token.
+3. `CURSOR_API_KEY` is mounted from the same Secret; the worker Pod uses that
+   key rather than the controller ServiceAccount token.
 4. `CURSOR_API_ENDPOINT` and `CURSOR_API_URL` are copied from the spawn-hook
-   environment (`https://api.cursor.com` unless `controller.endpoint` overrides).
-   Without those, `agent worker start` talks to the IDE backend, not the public
-   private-worker API.
+   environment (`https://api.cursor.com` unless `controller.endpoint` overrides)
+   so `agent worker start` talks to the public private-worker API.
 
 ### Claim-then-spawn (`controller.warmIdle=0`, default)
 
 The controller lists/watches pending pool requests, claims each one, and execs
-`--spawn` once per claim. No workers run until there is demand.
+`--spawn` once per claim. Worker Pods appear when there is demand.
 
 ### `--warm-idle` (`controller.warmIdle > 0`)
 
-Passed through as `agent worker controller --warm-idle <count>` (Origin 1015713).
-The controller never claims. It keeps `<count>` idle workers connected in
-`pool` by running the spawn hook once per missing warm worker. It does not
-patch Kubernetes objects; replacements are new Pods.
+Passed through as `agent worker controller --warm-idle <count>`. The controller
+keeps `<count>` idle workers connected in `pool` by running the spawn hook once
+per missing warm worker. Replacements are new Pods.
 
 When a session finishes and the worker exits, that Pod completes. The next
 warm reconcile sees idle below target and spawns again.
 
 Run one warm controller per pool. Two concurrent warm controllers can
-transiently over-spawn (no server-side spawn lease). This chart uses
-`strategy: Recreate` on the controller Deployment so a rollout is not two
-controllers at once.
+transiently over-spawn. This chart uses `strategy: Recreate` on the controller
+Deployment so a rollout keeps a single controller.
 
 Succeeded/Failed worker Pods stay until you delete them:
 
@@ -124,17 +117,17 @@ kubectl -n cursord delete pod -l app.kubernetes.io/component=worker \
   --field-selector=status.phase=Succeeded
 ```
 
-## What this does not do yet (vs the operator)
+## Compared to the operator
 
 | Operator (`WorkerDeployment`) | This chart |
 |-------------------------------|----------|
 | `readyReplicas` = idle workers; claimed `/readyz` 503 triggers replacements | `--warm-idle` (optional) or claim-then-spawn; each worker is a Pod created by `--spawn` |
-| Busy-safe rolling updates (drain idle, wait for busy) | No worker Deployment; controller uses Recreate; worker Pods are one-shot |
+| Busy-safe rolling updates (drain idle, wait for busy) | Controller uses Recreate; worker Pods are one-shot |
 | Operator token exchange + `--auth-token-file` rotation | Long-lived `CURSOR_API_KEY` from a Secret |
-| `WorkerDeployment` CRD + `worker-set-controller` | No CRD, no operator RBAC |
+| `WorkerDeployment` CRD + `worker-set-controller` | Vanilla Pods via `--spawn` |
 | Optional demand autoscaling / scale-to-zero | Claim-then-spawn if `warmIdle=0`; otherwise a fixed idle target via `--warm-idle` |
 
-Keep using the operator chart if you need those behaviors.
+Use the operator chart when you need those operator behaviors.
 
 ## Values
 
@@ -168,10 +161,10 @@ Same contract as the public Kubernetes guide (on **worker** Pods):
 
 | Endpoint | 200 | 503 |
 |----------|-----|-----|
-| `/healthz` | Process is running | Never |
+| `/healthz` | Process is running | — |
 | `/readyz` | Connected and idle | Starting, or running a session |
 
-The controller process does not serve these endpoints.
+Only worker Pods serve these endpoints.
 
 ## Validate locally
 
