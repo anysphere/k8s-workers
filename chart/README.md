@@ -1,11 +1,11 @@
-# cursor-worker-pool Helm Chart (proof of concept)
+# k8s-workers Helm Chart
 
 Deploys an in-cluster `agent worker controller` that kubectl-creates Cursor
 self-hosted **pool** workers as vanilla Kubernetes **Pods**. There is no custom
 operator, no `WorkerDeployment` CRD, no HPA, and no scaler that patches
 Deployment replica counts.
 
-This is an **additive PoC**. The published path remains:
+This chart is **additive** to the published operator path. The published path remains:
 
 1. Install [`worker-set-controller-chart`](../https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes).
 2. Apply `WorkerDeployment` resources.
@@ -43,7 +43,7 @@ kubectl create secret generic cursor-workers-api-key \
   --from-literal=api-key='YOUR_SERVICE_ACCOUNT_API_KEY' \
   -n cursord
 
-helm upgrade --install my-workers ./cursor-worker-pool/chart \
+helm upgrade --install my-workers ./k8s-workers/chart \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -55,7 +55,7 @@ helm upgrade --install my-workers ./cursor-worker-pool/chart \
 ### Chart-managed Secret
 
 ```bash
-helm upgrade --install my-workers ./cursor-worker-pool/chart \
+helm upgrade --install my-workers ./k8s-workers/chart \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -68,9 +68,9 @@ Do not commit `auth.apiKey`. Prefer `--set` or a gitignored values overlay.
 Render without installing:
 
 ```bash
-helm template my-workers ./cursor-worker-pool/chart \
+helm template my-workers ./k8s-workers/chart \
   --set image.repository=example.local/cursor-worker \
-  --set image.tag=poc \
+  --set image.tag=sample \
   --set auth.existingSecret=cursor-workers-api-key
 ```
 
@@ -123,7 +123,7 @@ kubectl -n cursord delete pod -l app.kubernetes.io/component=worker \
 
 ## What this does not do yet (vs the operator)
 
-| Operator (`WorkerDeployment`) | This PoC |
+| Operator (`WorkerDeployment`) | This chart |
 |-------------------------------|----------|
 | `readyReplicas` = idle workers; claimed `/readyz` 503 triggers replacements | `--warm-idle` (optional) or claim-then-spawn; each worker is a Pod created by `--spawn` |
 | Busy-safe rolling updates (drain idle, wait for busy) | No worker Deployment; controller uses Recreate; worker Pods are one-shot |
@@ -173,5 +173,5 @@ The controller process does not serve these endpoints.
 ## Validate locally
 
 ```bash
-./cursor-worker-pool/scripts/helm-validate.sh
+./k8s-workers/scripts/helm-validate.sh
 ```

@@ -1,37 +1,10 @@
-cursor-worker-pool (PoC) deployed to namespace {{ .Release.Namespace }}.
+k8s-workers deployed to namespace {{ .Release.Namespace }}.
 
-This chart is a proof of concept. It installs an in-cluster
-`agent worker controller` whose --spawn hook kubectl-creates worker Pods
-(restartPolicy: Never). It does not install the WorkerDeployment CRD or
-worker-set-controller, and it does not patch Deployments or HPA.
+This chart installs an in-cluster `agent worker controller` that
+kubectl-creates worker Pods (`restartPolicy: Never`). It does not install
+the WorkerDeployment operator.
 
-{{- if .Values.controller.enabled }}
-Controller: enabled (1 replica)
-Pool:       {{ .Values.pool }}
-Warm idle:  {{ if gt (.Values.controller.warmIdle | int) 0 }}--warm-idle {{ .Values.controller.warmIdle | int }}{{ else }}off (claim-then-spawn){{ end }}
-Image:      {{ include "cursor-worker-pool.image" . }}
-{{- else }}
-Controller: disabled (no in-cluster controller, no spawned workers)
-Pool:       {{ .Values.pool }}
-{{- end }}
+Pool: {{ .Values.pool }}
+Controller warmIdle: {{ .Values.controller.warmIdle | default 0 }}
 
-The controller authenticates with CURSOR_API_KEY from Secret
-{{ include "cursor-worker-pool.secretName" . }} (key {{ .Values.auth.secretKey }}).
-Spawned workers use the same Secret, inherit CURSOR_API_ENDPOINT / CURSOR_API_URL
-from the spawn hook (public private-worker API, not the IDE backend), and do
-not mount this ServiceAccount token.
-
-Verify:
-
-  kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "cursor-worker-pool.fullname" . }}
-  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/component=controller,app.kubernetes.io/instance={{ .Release.Name }}
-  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/component=worker,app.kubernetes.io/instance={{ .Release.Name }}
-
-Idle session → worker exits 0 → Pod Succeeded. If --warm-idle is set, the
-controller runs the spawn hook again for each missing idle worker.
-
-Succeeded/Failed worker Pods are not reaped automatically:
-  kubectl -n {{ .Release.Namespace }} delete pod -l app.kubernetes.io/component=worker --field-selector=status.phase=Succeeded
-
-This chart does not: busy-safe rolling updates, operator token rotation
-(--auth-token-file), or WorkerDeployment readyReplicas.
+See chart/README.md for install and values.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Render/lint checks for the cursor-worker-pool PoC chart.
+# Render/lint checks for the k8s-workers chart.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -7,7 +7,7 @@ CHART="${ROOT}/chart"
 
 helm lint "${CHART}" \
   --set image.repository=example.local/cursor-worker \
-  --set image.tag=poc \
+  --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key
 
 expect_fail() {
@@ -44,16 +44,16 @@ expect_fail "no image repository" \
   --set auth.existingSecret=cursor-workers-api-key
 expect_fail "no auth" \
   --set image.repository=example.local/cursor-worker \
-  --set image.tag=poc
+  --set image.tag=test
 expect_fail "warmIdle without controller" \
   --set image.repository=example.local/cursor-worker \
-  --set image.tag=poc \
+  --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key \
   --set controller.enabled=false \
   --set controller.warmIdle=2
 expect_fail "controller without service-account token" \
   --set image.repository=example.local/cursor-worker \
-  --set image.tag=poc \
+  --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key \
   --set controller.enabled=true \
   --set serviceAccount.automount=false
@@ -67,7 +67,7 @@ trap 'rm -rf "${WORKDIR}"' EXIT
 helm template test-release "${CHART}" \
   --namespace cursord \
   --set image.repository=example.local/cursor-worker \
-  --set image.tag=poc \
+  --set image.tag=test \
   --set pool=gpu \
   --set idleReleaseTimeout=600 \
   --set workerDir=/workspace \
@@ -82,7 +82,7 @@ must_contain "kind: ConfigMap"
 must_contain "kind: Role"
 must_contain "kind: RoleBinding"
 must_contain "replicas: 1"
-must_contain "example.local/cursor-worker:poc"
+must_contain "example.local/cursor-worker:test"
 must_contain "worker"
 must_contain "controller"
 must_contain "--spawn"
@@ -191,7 +191,7 @@ fi
 # Controller enabled is the default; an explicit true must still render.
 helm template test-release "${CHART}" \
   --set image.repository=example.local/cursor-worker \
-  --set image.tag=poc \
+  --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key \
   --set controller.enabled=true \
   --set controller.warmIdle=3 \
@@ -209,8 +209,8 @@ fi
 
 helm template test-release "${CHART}" \
   --set image.repository=example.local/cursor-worker \
-  --set image.tag=poc \
-  --set auth.apiKey=poc-not-a-real-key \
+  --set image.tag=test \
+  --set auth.apiKey=test-not-a-real-key \
   >"${SECRET_RENDER}"
 grep -F "kind: Secret" "${SECRET_RENDER}" >/dev/null
 
@@ -219,8 +219,8 @@ LONG_RENDER="${WORKDIR}/long.yaml"
 helm template test-release "${CHART}" \
   --set fullnameOverride=abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijk \
   --set image.repository=example.local/cursor-worker \
-  --set image.tag=poc \
-  --set auth.apiKey=poc-not-a-real-key \
+  --set image.tag=test \
+  --set auth.apiKey=test-not-a-real-key \
   >"${LONG_RENDER}"
 python3 - "${LONG_RENDER}" <<'PY'
 import re
