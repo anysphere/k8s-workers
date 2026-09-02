@@ -1,0 +1,95 @@
+{{- $_ := include "cursor-worker-pool.validate" . }}
+{{- if .Values.controller.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cursor-worker-pool.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cursor-worker-pool.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "cursor-worker-pool.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cursor-worker-pool.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/spawn: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if and .Values.auth.apiKey (not .Values.auth.existingSecret) }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "cursor-worker-pool.serviceAccountName" . }}
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: controller
+          image: {{ include "cursor-worker-pool.controllerImage" . | quote }}
+          imagePullPolicy: {{ include "cursor-worker-pool.controllerPullPolicy" . }}
+          command:
+            {{- toYaml .Values.command | nindent 12 }}
+          args:
+            - worker
+            - controller
+            - --spawn
+            - /hooks/spawn-pod.sh
+            - --pool
+            - {{ .Values.pool | quote }}
+            {{- if gt (.Values.controller.warmIdle | int) 0 }}
+            - --warm-idle
+            - {{ .Values.controller.warmIdle | int | quote }}
+            {{- end }}
+            {{- with .Values.controller.repository }}
+            - --repository
+            - {{ . | quote }}
+            {{- end }}
+            {{- range .Values.controller.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: CURSOR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cursor-worker-pool.secretName" . }}
+                  key: {{ .Values.auth.secretKey | quote }}
+            {{- with .Values.controller.endpoint }}
+            - name: CURSOR_API_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: spawn-hook
+              mountPath: /hooks
+              readOnly: true
+      volumes:
+        - name: spawn-hook
+          configMap:
+            name: {{ include "cursor-worker-pool.spawnConfigMapName" . }}
+            defaultMode: 0755
+{{- end }}

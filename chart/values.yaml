@@ -1,0 +1,125 @@
+# Cursor Self-Hosted Pool name passed to `agent worker controller --pool`
+# and to each spawned worker (`agent worker --pool`).
+pool: default
+
+# Seconds a worker may stay connected after becoming idle before it exits 0.
+# Combined with restartPolicy: Never on the spawned Pod, that exit is terminal
+# (the Pod goes Succeeded). Matches the public Kubernetes docs default.
+idleReleaseTimeout: 600
+
+# Workspace root passed to `agent worker --worker-dir`. Must exist in the image
+# (or be created by an init container / extra volume). Empty omits the flag.
+workerDir: /workspace
+
+# Listen address for GET /healthz, /readyz, and /metrics on worker Pods.
+managementAddr: "0.0.0.0:8080"
+
+image:
+  # Customer-built worker image: `agent` CLI + git + a cloned repo.
+  # The in-cluster controller uses this image too unless controller.image is set.
+  # The controller container also needs `kubectl` on PATH (spawn hook).
+  repository: ""
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Extra `--label key=value` flags for spawned workers (pool routing). These are
+# not Kubernetes pod labels.
+labels: []
+  # - team=backend
+  # - env=production
+
+command:
+  - agent
+
+# Extra CLI args inserted before `start` on spawned worker Pods.
+extraArgs: []
+
+auth:
+  # Name of an existing Secret that holds the team service account API key.
+  existingSecret: ""
+  # Key inside the Secret (created or existing).
+  secretKey: api-key
+  # If set and existingSecret is empty, the chart creates a Secret. Do not
+  # commit a real key; pass --set auth.apiKey=... or a values overlay.
+  apiKey: ""
+
+# In-cluster `agent worker controller`. Workers are created by --spawn as
+# standalone Pods (kubectl create), not by patching a Deployment or HPA.
+controller:
+  enabled: true
+  # Optional `--warm-idle <count>`. 0 omits the flag (claim-then-spawn).
+  # A positive integer keeps that many idle workers in `pool` by running the
+  # spawn hook once per missing warm worker. The CLI rejects 0 as a flag value,
+  # so this chart only passes the flag when warmIdle > 0.
+  warmIdle: 0
+  # Optional `--repository <url>` on the controller (repo-scoped keys / warm
+  # stats pin). Empty omits the flag.
+  repository: ""
+  # Optional override of the public API base (`CURSOR_API_ENDPOINT`). Empty
+  # uses the CLI default (https://api.cursor.com).
+  endpoint: ""
+  # Extra CLI args on the controller process (after --spawn / --pool / --warm-idle).
+  extraArgs: []
+  # Optional controller image. Empty uses `image` above. Must include `agent`
+  # and `kubectl`.
+  image:
+    repository: ""
+    tag: ""
+    digest: ""
+    pullPolicy: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+# Namespace Role granting the controller ServiceAccount create/get/list on Pods.
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # Must stay true while controller.enabled is set: kubectl uses the in-cluster
+  # token to create worker Pods.
+  automount: true
+
+# Resource requests/limits applied to spawned worker Pods (not the controller).
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+probes:
+  readiness:
+    path: /readyz
+    periodSeconds: 5
+    initialDelaySeconds: 15
+  liveness:
+    path: /healthz
+    periodSeconds: 10
+    initialDelaySeconds: 30
+
+# Kubernetes labels/annotations on spawned worker Pods.
+podLabels: {}
+podAnnotations: {}
+extraEnv: []
+extraVolumeMounts: []
+extraVolumes: []
+
+podSecurityContext: {}
+securityContext: {}
+
+terminationGracePeriodSeconds: 30
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []

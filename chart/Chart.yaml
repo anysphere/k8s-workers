@@ -1,0 +1,8 @@
+apiVersion: v2
+name: cursor-worker-pool
+version: 0.1.0
+appVersion: "0.1.0"
+type: application
+description: >
+  PoC: in-cluster agent worker controller that kubectl-creates worker Pods.
+  Not a replacement for worker-set-controller-chart / WorkerDeployment.

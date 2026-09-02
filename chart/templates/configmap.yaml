@@ -1,0 +1,68 @@
+{{- $_ := include "cursor-worker-pool.validate" . }}
+{{- if .Values.controller.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cursor-worker-pool.spawnConfigMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cursor-worker-pool.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+data:
+  spawn-pod.sh: |
+    #!/bin/sh
+    # Exec'd by `agent worker controller --spawn`. Creates one worker Pod and
+    # returns. Does not patch Deployments or HPA. Idle workers exit 0 after
+    # --idle-release-timeout; restartPolicy Never makes that terminal. Warm-idle
+    # replacements are another invocation of this hook.
+    set -eu
+
+    if ! command -v kubectl >/dev/null 2>&1; then
+      echo "spawn-pod: kubectl not found on PATH; the controller image must include kubectl" >&2
+      exit 127
+    fi
+
+    WORKER_ID="${CURSOR_AGENT_WORKER_ID:-}"
+    if [ -z "${WORKER_ID}" ]; then
+      echo "spawn-pod: CURSOR_AGENT_WORKER_ID is required" >&2
+      exit 1
+    fi
+
+    POOL="${CURSOR_POOL:-{{ .Values.pool }}}"
+    case "${POOL}" in
+      *[!a-zA-Z0-9._-]*)
+        echo "spawn-pod: refusing to interpolate unsafe CURSOR_POOL" >&2
+        exit 1
+        ;;
+    esac
+
+    POD_NAME="$(printf '%s' "${WORKER_ID}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g;s/^-*//;s/-*$//;s/--*/-/g' | cut -c1-63)"
+    if [ -z "${POD_NAME}" ]; then
+      echo "spawn-pod: could not derive a DNS-1123 pod name from CURSOR_AGENT_WORKER_ID" >&2
+      exit 1
+    fi
+
+    API_ENDPOINT="${CURSOR_API_ENDPOINT:-${CURSOR_API_URL:-}}"
+    if [ -z "${API_ENDPOINT}" ]; then
+      echo "spawn-pod: CURSOR_API_ENDPOINT or CURSOR_API_URL is required (public private-worker API, not the IDE backend)" >&2
+      exit 1
+    fi
+    case "${API_ENDPOINT}" in
+      *[!a-zA-Z0-9._:/-]*)
+        echo "spawn-pod: refusing to interpolate unsafe CURSOR_API_ENDPOINT" >&2
+        exit 1
+        ;;
+    esac
+    API_URL="${CURSOR_API_URL:-${API_ENDPOINT}}"
+    case "${API_URL}" in
+      *[!a-zA-Z0-9._:/-]*)
+        echo "spawn-pod: refusing to interpolate unsafe CURSOR_API_URL" >&2
+        exit 1
+        ;;
+    esac
+
+    echo "spawn-pod: kubectl create Pod ${POD_NAME} pool=${POOL} namespace={{ .Release.Namespace }}" >&2
+    kubectl create -f - <<EOF
+{{ include "cursor-worker-pool.workerPod" . | indent 4 }}
+    EOF
+{{- end }}

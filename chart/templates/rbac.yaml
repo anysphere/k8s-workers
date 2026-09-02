@@ -1,0 +1,32 @@
+{{- $_ := include "cursor-worker-pool.validate" . }}
+{{- if and .Values.controller.enabled .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "cursor-worker-pool.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cursor-worker-pool.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "cursor-worker-pool.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cursor-worker-pool.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "cursor-worker-pool.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cursor-worker-pool.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
