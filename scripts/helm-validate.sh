@@ -169,15 +169,15 @@ grep -F "kind: Pod" "${WORKDIR}/spawned-pod.yaml" >/dev/null
 grep -F "restartPolicy: Never" "${WORKDIR}/spawned-pod.yaml" >/dev/null
 grep -F "ctrl-6e0d261c-86a2-4383-89f0-9162c1c10662" "${WORKDIR}/spawned-pod.yaml" >/dev/null
 if grep -F "CURSOR_API_ENDPOINT" "${WORKDIR}/spawned-pod.yaml"; then
-  echo "worker Pod must not inherit the controller API host" >&2
+  echo "spawned worker Pod includes CURSOR_API_ENDPOINT" >&2
   exit 1
 fi
 if grep -F "CURSOR_API_URL" "${WORKDIR}/spawned-pod.yaml"; then
-  echo "worker Pod must not inherit the controller API host" >&2
+  echo "spawned worker Pod includes CURSOR_API_URL" >&2
   exit 1
 fi
 if grep -F "https://api.cursor.com" "${WORKDIR}/spawned-pod.yaml"; then
-  echo "worker Pod must not inherit the controller API host" >&2
+  echo "spawned worker Pod includes https://api.cursor.com" >&2
   exit 1
 fi
 if grep -F "kind: Deployment" "${WORKDIR}/spawned-pod.yaml"; then

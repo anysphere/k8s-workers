@@ -43,14 +43,10 @@ data:
     fi
 
     echo "spawn-pod: kubectl create Pod ${POD_NAME} pool=${POOL} namespace={{ .Release.Namespace }}" >&2
-    # Do not copy CURSOR_API_ENDPOINT / CURSOR_API_URL onto the worker. The
-    # controller default (api.cursor.com) is for /v0/private-workers; worker
-    # start mints a session at the CLI auth default (api2.cursor.sh).
-    # Child python cannot see unexported shell locals; the original unquoted
-    # heredoc expanded these in-process.
+    # Worker start uses the CLI auth default to mint a session. Export so the
+    # quoted python heredoc can substitute POD_NAME / POOL; $ in command stays
+    # literal.
     export POD_NAME POOL
-    # Substitute only the hook-owned variables. An unquoted heredoc would also
-    # expand `$` inside .Values.command / extraEnv (e.g. install wrappers).
     python3 - <<'PY' | kubectl create -f -
     import os
     import sys

@@ -59,7 +59,7 @@ controller:
   # stats pin). Empty omits the flag.
   repository: ""
   # Optional override of the controller public API base (`CURSOR_API_ENDPOINT`).
-  # Empty uses the CLI default (https://api.cursor.com). Not copied onto workers.
+  # Empty uses the CLI default (https://api.cursor.com).
   endpoint: ""
   # Extra CLI args on the controller process (after --spawn / --pool / --warm-idle).
   extraArgs: []
