@@ -157,21 +157,9 @@ exit 1
 EOF
 chmod +x "${WORKDIR}/spawn-pod.sh" "${WORKDIR}/kubectl"
 
-if PATH="${WORKDIR}:${PATH}" \
-  CURSOR_AGENT_WORKER_ID="ctrl-6e0d261c-86a2-4383-89f0-9162c1c10662" \
-  CURSOR_POOL="gpu" \
-  "${WORKDIR}/spawn-pod.sh" >"${WORKDIR}/spawn-no-endpoint.out" 2>&1; then
-  echo "spawn hook must fail without CURSOR_API_ENDPOINT" >&2
-  cat "${WORKDIR}/spawn-no-endpoint.out" >&2
-  exit 1
-fi
-grep -F "CURSOR_API_ENDPOINT or CURSOR_API_URL is required" "${WORKDIR}/spawn-no-endpoint.out" >/dev/null
-
 PATH="${WORKDIR}:${PATH}" \
   CURSOR_AGENT_WORKER_ID="ctrl-6e0d261c-86a2-4383-89f0-9162c1c10662" \
   CURSOR_POOL="gpu" \
-  CURSOR_API_ENDPOINT="https://api.cursor.com" \
-  CURSOR_API_URL="https://api.cursor.com" \
   "${WORKDIR}/spawn-pod.sh" >"${WORKDIR}/spawn.out" 2>&1 || {
     cat "${WORKDIR}/spawn.out" >&2
     echo "spawn hook failed" >&2
@@ -180,9 +168,18 @@ PATH="${WORKDIR}:${PATH}" \
 grep -F "kind: Pod" "${WORKDIR}/spawned-pod.yaml" >/dev/null
 grep -F "restartPolicy: Never" "${WORKDIR}/spawned-pod.yaml" >/dev/null
 grep -F "ctrl-6e0d261c-86a2-4383-89f0-9162c1c10662" "${WORKDIR}/spawned-pod.yaml" >/dev/null
-grep -F "CURSOR_API_ENDPOINT" "${WORKDIR}/spawned-pod.yaml" >/dev/null
-grep -F "CURSOR_API_URL" "${WORKDIR}/spawned-pod.yaml" >/dev/null
-grep -F "https://api.cursor.com" "${WORKDIR}/spawned-pod.yaml" >/dev/null
+if grep -F "CURSOR_API_ENDPOINT" "${WORKDIR}/spawned-pod.yaml"; then
+  echo "spawned worker Pod includes CURSOR_API_ENDPOINT" >&2
+  exit 1
+fi
+if grep -F "CURSOR_API_URL" "${WORKDIR}/spawned-pod.yaml"; then
+  echo "spawned worker Pod includes CURSOR_API_URL" >&2
+  exit 1
+fi
+if grep -F "https://api.cursor.com" "${WORKDIR}/spawned-pod.yaml"; then
+  echo "spawned worker Pod includes https://api.cursor.com" >&2
+  exit 1
+fi
 if grep -F "kind: Deployment" "${WORKDIR}/spawned-pod.yaml"; then
   echo "spawn hook must create a Pod, not a Deployment" >&2
   exit 1

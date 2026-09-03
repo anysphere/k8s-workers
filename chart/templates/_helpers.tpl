@@ -223,10 +223,6 @@ spec:
           value: ${POD_NAME}
         - name: CURSOR_WORKER_NAME
           value: ${POD_NAME}
-        - name: CURSOR_API_ENDPOINT
-          value: "${API_ENDPOINT}"
-        - name: CURSOR_API_URL
-          value: "${API_URL}"
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
