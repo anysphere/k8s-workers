@@ -88,9 +88,11 @@ runs `kubectl create -f -` with a Pod spec:
    id the controller claimed or generated).
 3. `CURSOR_API_KEY` is mounted from the same Secret; the worker Pod uses that
    key rather than the controller ServiceAccount token.
-4. `CURSOR_API_ENDPOINT` and `CURSOR_API_URL` are copied from the spawn-hook
-   environment (`https://api.cursor.com` unless `controller.endpoint` overrides)
-   so `agent worker start` talks to the public private-worker API.
+4. Worker Pods do **not** inherit `CURSOR_API_ENDPOINT` / `CURSOR_API_URL`
+   from the controller. The controller default (`https://api.cursor.com`) is
+   for `/v0/private-workers`. `agent worker start` uses the CLI auth default
+   (`https://api2.cursor.sh`) to mint a session. Set `controller.endpoint`
+   only to override the controller process.
 
 ### Claim-then-spawn (`controller.warmIdle=0`, default)
 
@@ -148,7 +150,7 @@ Use the operator chart when you need those operator behaviors.
 | `controller.enabled` | `true` | Deploy the in-cluster controller |
 | `controller.warmIdle` | `0` | `0` omits `--warm-idle` (claim mode). A positive integer is passed through as `--warm-idle` |
 | `controller.repository` | `""` | Optional `--repository` on the controller |
-| `controller.endpoint` | `""` | Optional `CURSOR_API_ENDPOINT` override |
+| `controller.endpoint` | `""` | Optional controller `CURSOR_API_ENDPOINT` override. Not copied onto worker Pods |
 | `controller.image.*` | empty | Optional controller image (`agent` + `kubectl`) |
 | `rbac.create` | `true` | Role/RoleBinding for Pod create |
 | `resources` | 250m / 512Mi request, 2Gi memory limit | Spawned **worker** Pod resources |

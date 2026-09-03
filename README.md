@@ -252,9 +252,6 @@ Useful while iterating on the spawn hook or image.
 
    ```bash
    export CURSOR_API_KEY='YOUR_SERVICE_ACCOUNT_API_KEY'
-   # Optional; defaults used by in-cluster hooks:
-   # export CURSOR_API_ENDPOINT=https://api.cursor.com
-   # export CURSOR_API_URL=https://api.cursor.com
 
    agent worker controller --spawn ./path/to/spawn-pod.sh --pool default
    # warm idle:
@@ -293,8 +290,8 @@ Only worker Pods serve these endpoints.
 | Symptom | What to check |
 | --- | --- |
 | Nothing is ever claimed | Controller logs; `CURSOR_API_KEY` Secret; `pool` matches the dashboard; Self-Hosted enabled for the team |
-| `HTTP 401` / invalid API key | Use a **service account** key with agent scope, not a personal key. Point workers at the public private-worker API host |
-| Pods spawn then exit immediately | Image has `agent` + `git`; `workerDir` exists; `CURSOR_API_ENDPOINT` / `CURSOR_API_URL` copied into the worker Pod (see spawn hook); check worker logs |
+| `HTTP 401` / invalid API key | Use a **service account** key with agent scope, not a personal key |
+| Pods spawn then exit immediately | Image has `agent` + `git`; `workerDir` exists; check worker logs |
 | Agent cannot find the pool under a repo | You started any-repo (no `repo=` labels). Pick **Any repo**, or bake a git remote for repo-bound |
 | Warm idle overshoots | Only one controller per pool; chart uses Recreate — avoid a second Helm release on the same pool with `warmIdle>0` |
 | Controller CrashLoop | Controller image missing `kubectl` or `agent`; RBAC Role cannot create Pods; Secret key name ≠ `auth.secretKey` |

@@ -58,8 +58,8 @@ controller:
   # Optional `--repository <url>` on the controller (repo-scoped keys / warm
   # stats pin). Empty omits the flag.
   repository: ""
-  # Optional override of the public API base (`CURSOR_API_ENDPOINT`). Empty
-  # uses the CLI default (https://api.cursor.com).
+  # Optional override of the controller public API base (`CURSOR_API_ENDPOINT`).
+  # Empty uses the CLI default (https://api.cursor.com). Not copied onto workers.
   endpoint: ""
   # Extra CLI args on the controller process (after --spawn / --pool / --warm-idle).
   extraArgs: []

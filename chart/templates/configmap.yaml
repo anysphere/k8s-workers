@@ -42,27 +42,29 @@ data:
       exit 1
     fi
 
-    API_ENDPOINT="${CURSOR_API_ENDPOINT:-${CURSOR_API_URL:-}}"
-    if [ -z "${API_ENDPOINT}" ]; then
-      echo "spawn-pod: CURSOR_API_ENDPOINT or CURSOR_API_URL is required (public private-worker API, not the IDE backend)" >&2
-      exit 1
-    fi
-    case "${API_ENDPOINT}" in
-      *[!a-zA-Z0-9._:/-]*)
-        echo "spawn-pod: refusing to interpolate unsafe CURSOR_API_ENDPOINT" >&2
-        exit 1
-        ;;
-    esac
-    API_URL="${CURSOR_API_URL:-${API_ENDPOINT}}"
-    case "${API_URL}" in
-      *[!a-zA-Z0-9._:/-]*)
-        echo "spawn-pod: refusing to interpolate unsafe CURSOR_API_URL" >&2
-        exit 1
-        ;;
-    esac
-
     echo "spawn-pod: kubectl create Pod ${POD_NAME} pool=${POOL} namespace={{ .Release.Namespace }}" >&2
-    kubectl create -f - <<EOF
+    # Do not copy CURSOR_API_ENDPOINT / CURSOR_API_URL onto the worker. The
+    # controller default (api.cursor.com) is for /v0/private-workers; worker
+    # start mints a session at the CLI auth default (api2.cursor.sh).
+    # Child python cannot see unexported shell locals; the original unquoted
+    # heredoc expanded these in-process.
+    export POD_NAME POOL
+    # Substitute only the hook-owned variables. An unquoted heredoc would also
+    # expand `$` inside .Values.command / extraEnv (e.g. install wrappers).
+    python3 - <<'PY' | kubectl create -f -
+    import os
+    import sys
+    import textwrap
+
+    text = textwrap.dedent(r'''
 {{ include "cursor-worker-pool.workerPod" . | indent 4 }}
-    EOF
+    ''')
+    for key in ("POD_NAME", "POOL"):
+        value = os.environ.get(key)
+        if value is None:
+            sys.stderr.write("spawn-pod: missing %s\n" % key)
+            sys.exit(1)
+        text = text.replace("${%s}" % key, value)
+    sys.stdout.write(text)
+    PY
 {{- end }}
