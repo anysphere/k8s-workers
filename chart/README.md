@@ -169,6 +169,15 @@ Only worker Pods serve these endpoints.
 
 ## Validate locally
 
+Render, lint, and mock-spawn checks (no cluster needed):
+
 ```bash
 ./scripts/helm-validate.sh
+```
+
+End-to-end on a local kind cluster with a stub `agent` image (no Cursor
+credentials; see the root README):
+
+```bash
+./scripts/kind-e2e.sh
 ```

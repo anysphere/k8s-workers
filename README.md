@@ -214,6 +214,17 @@ Local lint / kubeconform (optional):
 ./scripts/helm-validate.sh
 ```
 
+Local end-to-end smoke test on a [kind](https://kind.sigs.k8s.io/) cluster
+(needs docker, kind, kubectl, helm, jq; no Cursor credentials). A stub `agent`
+in `scripts/stub-agent/` stands in for the CLI so the controller Deployment,
+spawn hook, RBAC, worker probes, and idle-exit → `Succeeded` path all run
+against a real API server:
+
+```bash
+./scripts/kind-e2e.sh
+# KEEP_CLUSTER=1 leaves the cluster up; KIND_CLUSTER=<name> reuses an existing one
+```
+
 Full values reference: [chart/README.md](chart/README.md).
 
 ## Run a cloud agent
