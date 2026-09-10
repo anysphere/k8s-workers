@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Stand-in for the Cursor `agent` CLI used by scripts/kind-e2e.sh.
+
+It never talks to Cursor. It only mimics the process contract the chart
+relies on so the chart's mechanics can run for real inside a cluster:
+
+  agent worker controller --spawn HOOK --pool POOL [--warm-idle N] ...
+      Runs HOOK once per warm worker (or once, standing in for a single
+      claim, when --warm-idle is absent) with CURSOR_AGENT_WORKER_ID and
+      CURSOR_POOL set the way the real controller sets them, then idles.
+      A failing hook exits 1 so the failure surfaces on the Deployment.
+
+  agent worker --pool POOL --idle-release-timeout S --management-addr A ... start
+      Serves 200 on /healthz, /readyz, and /metrics, logs its args and
+      env, and exits 0 after S seconds to mimic idle release.
+"""
+import http.server
+import os
+import subprocess
+import sys
+import threading
+import time
+import uuid
+
+
+def log(msg):
+    print("[stub-agent] " + msg, flush=True)
+
+
+def parse_flags(argv):
+    flags, positional, i = {}, [], 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg.startswith("--"):
+            key = arg[2:]
+            if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                flags.setdefault(key, []).append(argv[i + 1])
+                i += 2
+                continue
+            flags.setdefault(key, []).append("true")
+        else:
+            positional.append(arg)
+        i += 1
+    return flags, positional
+
+
+def run_controller(argv):
+    flags, _ = parse_flags(argv)
+    spawn = flags["spawn"][0]
+    pool = flags.get("pool", ["default"])[0]
+    warm = int(flags.get("warm-idle", ["0"])[0])
+    count = warm if warm > 0 else int(os.environ.get("STUB_CLAIMS", "1"))
+    log(f"controller: pool={pool} warm-idle={warm} spawn={spawn} flags={flags}")
+    log(
+        "controller: CURSOR_API_KEY set=%s CURSOR_API_ENDPOINT=%s"
+        % (bool(os.environ.get("CURSOR_API_KEY")), os.environ.get("CURSOR_API_ENDPOINT"))
+    )
+    for n in range(count):
+        worker_id = f"ctrl-{uuid.uuid4()}"
+        env = dict(os.environ, CURSOR_AGENT_WORKER_ID=worker_id, CURSOR_POOL=pool)
+        log(f"controller: spawning worker {n + 1}/{count} id={worker_id}")
+        res = subprocess.run([spawn], env=env, capture_output=True, text=True)
+        log(
+            "controller: spawn exit=%d stdout=%r stderr=%r"
+            % (res.returncode, res.stdout.strip(), res.stderr.strip())
+        )
+        if res.returncode != 0:
+            log("controller: spawn hook failed")
+            sys.exit(1)
+    log("controller: all spawns done; idling")
+    while True:
+        time.sleep(3600)
+
+
+class Health(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        code = 200 if self.path in ("/healthz", "/readyz", "/metrics") else 404
+        self.send_response(code)
+        self.end_headers()
+        self.wfile.write(b"ok\n" if code == 200 else b"not found\n")
+
+    def log_message(self, *_):
+        pass
+
+
+def run_worker(argv):
+    flags, positional = parse_flags(argv)
+    if positional[-1:] != ["start"]:
+        log(f"worker: expected trailing 'start', got {positional}")
+        sys.exit(2)
+    addr = flags.get("management-addr", ["0.0.0.0:8080"])[0]
+    host, _, port = addr.rpartition(":")
+    idle = int(flags.get("idle-release-timeout", ["600"])[0])
+    log(
+        "worker: pool=%s worker-dir=%s labels=%s idle-release-timeout=%d management-addr=%s"
+        % (flags.get("pool"), flags.get("worker-dir"), flags.get("label"), idle, addr)
+    )
+    log(
+        "worker: env "
+        + " ".join(
+            f"{k}={os.environ.get(k)}"
+            for k in ("CURSOR_POOL", "CURSOR_AGENT_WORKER_ID", "CURSOR_WORKER_NAME", "CURSOR_API_ENDPOINT")
+        )
+    )
+    log(f"worker: CURSOR_API_KEY set={bool(os.environ.get('CURSOR_API_KEY'))}")
+    worker_dir = flags.get("worker-dir", [None])[0]
+    if worker_dir:
+        log(f"worker: worker-dir exists={os.path.isdir(worker_dir)}")
+    server = http.server.ThreadingHTTPServer((host or "0.0.0.0", int(port)), Health)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    log("worker: connected+idle (stub); serving /healthz and /readyz")
+    time.sleep(idle)
+    log("worker: idle-release-timeout elapsed; exiting 0")
+    sys.exit(0)
+
+
+def main():
+    argv = sys.argv[1:]
+    if argv[:2] == ["worker", "controller"]:
+        run_controller(argv[2:])
+    elif argv[:1] == ["worker"]:
+        run_worker(argv[1:])
+    else:
+        log(f"unsupported argv: {argv}")
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()
