@@ -295,6 +295,144 @@ expect_hook_fail "unsafe worker id" "${WORKDIR}/hooks-off" "${WORKDIR}/unsafe-id
 expect_hook_fail "unsafe pool" "${WORKDIR}/hooks-off" "${WORKDIR}/unsafe-pool" 1 \
   CURSOR_POOL='gpu|x'
 
+# ---------------------------------------------------------------------------
+# Hibernation. Off (the default) must add nothing to the release.
+must_not_contain "kind: CronJob"
+must_not_contain "kind: PersistentVolumeClaim"
+must_not_contain "persistentvolumeclaims"
+must_not_contain "entrypoint.sh"
+must_not_contain "/cursor-hooks"
+
+expect_fail "hibernation without controller" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set hibernation.enabled=true --set controller.enabled=false
+expect_fail "hibernation without workerDir" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set hibernation.enabled=true --set workerDir=
+expect_fail "hibernation with wakeWindowSeconds=0" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set hibernation.enabled=true --set hibernation.wakeWindowSeconds=0
+expect_fail "hibernation with a bad pvcTtl" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set hibernation.enabled=true --set hibernation.pvcTtl=3days
+expect_fail "hibernation with two seeds" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set hibernation.enabled=true \
+  --set hibernation.seed.fromPath=/opt/seed --set hibernation.seed.cloneUrl=https://example.com/r.git
+
+HIB_RENDER="${WORKDIR}/hibernation.yaml"
+helm template test-release "${CHART}" \
+  --namespace cursord \
+  --set image.repository=example.local/cursor-worker \
+  --set image.tag=test \
+  --set pool=gpu \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set hibernation.enabled=true \
+  --set hibernation.storageClassName=fast \
+  --set hibernation.size=10Gi \
+  --set hibernation.mountHome=true \
+  --set hibernation.homeDir=/home/worker \
+  --set hibernation.seed.fromPath=/opt/seed \
+  --set hibernation.pvcTtl=36h \
+  --set hibernation.podTtl=30m \
+  --set 'hibernation.reaper.schedule=*/5 * * * *' \
+  >"${HIB_RENDER}"
+file_contains "${HIB_RENDER}" "kind: CronJob"
+file_contains "${HIB_RENDER}" 'schedule: "*/5 * * * *"'
+file_contains "${HIB_RENDER}" "concurrencyPolicy: Forbid"
+file_contains "${HIB_RENDER}" 'value: "129600"'
+file_contains "${HIB_RENDER}" 'value: "1800"'
+file_contains "${HIB_RENDER}" "test-release-k8s-workers-reaper"
+file_contains "${HIB_RENDER}" 'verbs: ["create", "get", "list", "patch"]'
+file_contains "${HIB_RENDER}" 'verbs: ["get", "list", "delete"]'
+file_contains "${HIB_RENDER}" "workspace-pvc.yaml: |"
+file_contains "${HIB_RENDER}" "entrypoint.sh: |"
+file_contains "${HIB_RENDER}" 'storageClassName: "fast"'
+file_contains "${HIB_RENDER}" 'storage: "10Gi"'
+file_contains "${HIB_RENDER}" 'mountPath: "/home/worker"'
+file_contains "${HIB_RENDER}" "subPath: home"
+file_contains "${HIB_RENDER}" "/cursor-hooks/entrypoint.sh"
+file_contains "${HIB_RENDER}" 'SEED_PATH="/opt/seed"'
+if grep -E "^kind: (Pod|PersistentVolumeClaim)$" "${HIB_RENDER}"; then
+  echo "hibernation render must not include static Pods or PVCs; the hook creates them" >&2
+  exit 1
+fi
+
+extract_hooks "${HIB_RENDER}" "${WORKDIR}/hooks-on"
+for k in spawn-pod.sh worker-pod.yaml workspace-pvc.yaml entrypoint.sh; do
+  [ -s "${WORKDIR}/hooks-on/${k}" ] || { echo "hibernation ConfigMap missing ${k}" >&2; exit 1; }
+done
+sh -n "${WORKDIR}/hooks-on/spawn-pod.sh"
+sh -n "${WORKDIR}/hooks-on/entrypoint.sh"
+sh -n "${WORKDIR}/hooks-off/spawn-pod.sh"
+
+# On, no wake, PVC missing: create the PVC, stamp it, create the Pod with it mounted.
+run_hook "on/no-wake/missing" "${WORKDIR}/hooks-on" "${WORKDIR}/on-nowake-missing"
+[ "$(created_count "${WORKDIR}/on-nowake-missing")" = "2" ] || { echo "on/no-wake/missing must create PVC then Pod" >&2; exit 1; }
+PVC_OUT="${WORKDIR}/on-nowake-missing/created-1.yaml"
+HIB_POD="${WORKDIR}/on-nowake-missing/created-2.yaml"
+file_contains "${PVC_OUT}" "kind: PersistentVolumeClaim"
+file_contains "${PVC_OUT}" "name: \"ws-${WORKER_ID}\""
+file_contains "${PVC_OUT}" "cursor.com/worker-id: \"${WORKER_ID}\""
+file_contains "${PVC_OUT}" 'cursor.com/pool: "gpu"'
+file_contains "${PVC_OUT}" "app.kubernetes.io/component: workspace"
+file_contains "${HIB_POD}" "kind: Pod"
+file_contains "${HIB_POD}" "generateName: \"${WORKER_ID}-\""
+file_contains "${HIB_POD}" "claimName: \"ws-${WORKER_ID}\""
+file_contains "${HIB_POD}" "/cursor-hooks/entrypoint.sh"
+file_contains "${HIB_POD}" "test-release-k8s-workers-spawn"
+grep -F -A1 -- "args:" "${HIB_POD}" | grep -F -- "- agent" >/dev/null \
+  || { echo "hibernation Pod must pass the command through the entrypoint args" >&2; exit 1; }
+file_contains "${WORKDIR}/on-nowake-missing/annotate.log" "pvc ws-${WORKER_ID} --overwrite cursor.com/last-used-at="
+file_contains "${WORKDIR}/on-nowake-missing/annotate.log" "cursor.com/last-used-epoch="
+
+# On, no wake, PVC present (a warm respawn or retry): reuse it, stamp it, create the Pod.
+run_hook "on/no-wake/present" "${WORKDIR}/hooks-on" "${WORKDIR}/on-nowake-present" MOCK_PVC_STATE="Bound/"
+[ "$(created_count "${WORKDIR}/on-nowake-present")" = "1" ] || { echo "on/no-wake/present must create only the Pod" >&2; exit 1; }
+file_contains "${WORKDIR}/on-nowake-present/created-1.yaml" "kind: Pod"
+file_contains "${WORKDIR}/on-nowake-present/created-1.yaml" "claimName: \"ws-${WORKER_ID}\""
+[ -s "${WORKDIR}/on-nowake-present/annotate.log" ]
+
+# On, wake, PVC present: the resume path.
+run_hook "on/wake/present" "${WORKDIR}/hooks-on" "${WORKDIR}/on-wake-present" CURSOR_WAKE=1 MOCK_PVC_STATE="Bound/"
+[ "$(created_count "${WORKDIR}/on-wake-present")" = "1" ] || { echo "on/wake/present must create only the Pod" >&2; exit 1; }
+file_contains "${WORKDIR}/on-wake-present/created-1.yaml" "claimName: \"ws-${WORKER_ID}\""
+file_contains "${WORKDIR}/on-wake-present/created-1.yaml" "value: \"${WORKER_ID}\""
+[ -s "${WORKDIR}/on-wake-present/annotate.log" ]
+
+# On, wake, PVC missing or terminating: exit 3, create nothing, let the window lapse.
+expect_hook_fail "on/wake/missing" "${WORKDIR}/hooks-on" "${WORKDIR}/on-wake-missing" 3 CURSOR_WAKE=1
+file_contains "${WORKDIR}/on-wake-missing/hook.out" "reconnect window lapses"
+expect_hook_fail "on/wake/terminating" "${WORKDIR}/hooks-on" "${WORKDIR}/on-wake-terminating" 3 \
+  CURSOR_WAKE=1 MOCK_PVC_STATE="Bound/2026-09-10T00:00:00Z"
+# On, no wake, PVC terminating: neither mountable nor creatable; fail for a retry.
+expect_hook_fail "on/no-wake/terminating" "${WORKDIR}/hooks-on" "${WORKDIR}/on-nowake-terminating" 1 \
+  MOCK_PVC_STATE="Bound/2026-09-10T00:00:00Z"
+for d in on-wake-missing on-wake-terminating on-nowake-terminating; do
+  [ ! -e "${WORKDIR}/${d}/annotate.log" ] || { echo "${d} must not stamp last-used" >&2; exit 1; }
+done
+
+# Entrypoint: seeds an empty workspace, resumes a populated one, execs its argv.
+ENTRY_HOME="${WORKDIR}/entry"
+mkdir -p "${ENTRY_HOME}/seed" "${ENTRY_HOME}/ws"
+echo seeded >"${ENTRY_HOME}/seed/SEED.txt"
+sed -e "s|WORKER_DIR=\"/workspace\"|WORKER_DIR=\"${ENTRY_HOME}/ws\"|" \
+    -e "s|SEED_PATH=\"/opt/seed\"|SEED_PATH=\"${ENTRY_HOME}/seed\"|" \
+    "${WORKDIR}/hooks-on/entrypoint.sh" >"${ENTRY_HOME}/entrypoint.sh"
+out="$(sh "${ENTRY_HOME}/entrypoint.sh" echo agent-argv 2>"${ENTRY_HOME}/err")"
+[ "${out}" = "agent-argv" ] || { echo "entrypoint must exec its argv" >&2; exit 1; }
+[ -f "${ENTRY_HOME}/ws/SEED.txt" ] || { echo "entrypoint must seed an empty workspace" >&2; exit 1; }
+file_contains "${ENTRY_HOME}/err" "seeding"
+echo scratch >"${ENTRY_HOME}/ws/scratch.txt"
+sh "${ENTRY_HOME}/entrypoint.sh" true 2>"${ENTRY_HOME}/err2"
+file_contains "${ENTRY_HOME}/err2" "already populated; resuming"
+[ -f "${ENTRY_HOME}/ws/scratch.txt" ]
+
 # Controller enabled is the default; an explicit true must still render.
 helm template test-release "${CHART}" \
   --set image.repository=example.local/cursor-worker \
@@ -354,6 +492,9 @@ if command -v kubeconform >/dev/null 2>&1; then
   kubeconform -strict -ignore-missing-schemas -summary "${WARM_RENDER}"
   kubeconform -strict -ignore-missing-schemas -summary "${SECRET_RENDER}"
   kubeconform -strict -ignore-missing-schemas -summary "${SPAWNED}"
+  kubeconform -strict -ignore-missing-schemas -summary "${HIB_RENDER}"
+  kubeconform -strict -ignore-missing-schemas -summary "${PVC_OUT}"
+  kubeconform -strict -ignore-missing-schemas -summary "${HIB_POD}"
 fi
 
 echo "helm-validate: ok"
