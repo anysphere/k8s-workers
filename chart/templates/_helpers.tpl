@@ -149,27 +149,34 @@ Required calls are assigned so this helper emits no YAML.
 {{- end -}}
 
 {{/*
-Pod manifest kubectl-created by the spawn hook. Column-0 YAML; runtime
-shell variables are ${POD_NAME} and ${POOL}. restartPolicy is Never so an
-idle-release exit is terminal.
+Pod manifest kubectl-created by the spawn hook. Column-0 YAML. The hook
+substitutes exactly three tokens with sed: ${WORKER_SLUG} (DNS-1123 form of
+the worker id, used for Kubernetes names and labels), ${WORKER_ID} (the id
+the controller claimed, passed to the worker verbatim) and ${POOL}.
+generateName gives every episode its own Pod name so a wake never collides
+with the previous Succeeded Pod. restartPolicy is Never so an idle-release
+exit is terminal.
 */}}
 {{- define "cursor-worker-pool.workerPod" -}}
 apiVersion: v1
 kind: Pod
 metadata:
-  name: ${POD_NAME}
+  generateName: "${WORKER_SLUG}-"
   namespace: {{ .Release.Namespace | quote }}
   labels:
     app.kubernetes.io/name: {{ include "cursor-worker-pool.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: worker
+    cursor.com/worker-id: "${WORKER_SLUG}"
     {{- with .Values.podLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- with .Values.podAnnotations }}
   annotations:
+    cursor.com/worker-id: "${WORKER_ID}"
+    cursor.com/pool: "${POOL}"
+    {{- with .Values.podAnnotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false
@@ -194,7 +201,7 @@ spec:
       args:
         - worker
         - --pool
-        - ${POOL}
+        - "${POOL}"
         - --idle-release-timeout
         - {{ .Values.idleReleaseTimeout | int | quote }}
         {{- if .Values.workerDir }}
@@ -218,11 +225,13 @@ spec:
               name: {{ include "cursor-worker-pool.secretName" . }}
               key: {{ .Values.auth.secretKey | quote }}
         - name: CURSOR_POOL
-          value: ${POOL}
+          value: "${POOL}"
         - name: CURSOR_AGENT_WORKER_ID
-          value: ${POD_NAME}
+          value: "${WORKER_ID}"
         - name: CURSOR_WORKER_NAME
-          value: ${POD_NAME}
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

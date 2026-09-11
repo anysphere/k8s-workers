@@ -14,8 +14,12 @@ data:
     # Exec'd by `agent worker controller --spawn`. Creates one worker Pod and
     # returns. Does not patch Deployments or HPA. Idle workers exit 0 after
     # --idle-release-timeout; restartPolicy Never makes that terminal. Warm-idle
-    # replacements are another invocation of this hook.
+    # replacements are another invocation of this hook. Needs only kubectl and
+    # a POSIX shell (sh, sed, tr, cut).
     set -eu
+
+    HOOKS_DIR="$(cd "$(dirname "$0")" && pwd)"
+    NAMESPACE={{ .Release.Namespace | quote }}
 
     if ! command -v kubectl >/dev/null 2>&1; then
       echo "spawn-pod: kubectl not found on PATH; the controller image must include kubectl" >&2
@@ -27,6 +31,12 @@ data:
       echo "spawn-pod: CURSOR_AGENT_WORKER_ID is required" >&2
       exit 1
     fi
+    case "${WORKER_ID}" in
+      *[!a-zA-Z0-9._-]*)
+        echo "spawn-pod: refusing to interpolate unsafe CURSOR_AGENT_WORKER_ID" >&2
+        exit 1
+        ;;
+    esac
 
     POOL="${CURSOR_POOL:-{{ .Values.pool }}}"
     case "${POOL}" in
@@ -36,31 +46,27 @@ data:
         ;;
     esac
 
-    POD_NAME="$(printf '%s' "${WORKER_ID}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g;s/^-*//;s/-*$//;s/--*/-/g' | cut -c1-63)"
-    if [ -z "${POD_NAME}" ]; then
-      echo "spawn-pod: could not derive a DNS-1123 pod name from CURSOR_AGENT_WORKER_ID" >&2
+    # DNS-1123 form of the worker id for Kubernetes names and labels. 57 chars
+    # leaves room for the generateName suffix within the 63-char limit.
+    WORKER_SLUG="$(printf '%s' "${WORKER_ID}" | tr '[:upper:]' '[:lower:]' \
+      | sed 's/[^a-z0-9-]/-/g;s/^-*//;s/--*/-/g' | cut -c1-57 | sed 's/-*$//')"
+    if [ -z "${WORKER_SLUG}" ]; then
+      echo "spawn-pod: could not derive a DNS-1123 name from CURSOR_AGENT_WORKER_ID" >&2
       exit 1
     fi
 
-    echo "spawn-pod: kubectl create Pod ${POD_NAME} pool=${POOL} namespace={{ .Release.Namespace }}" >&2
-    # Worker start uses the CLI auth default to mint a session. Export so the
-    # quoted python heredoc can substitute POD_NAME / POOL; $ in command stays
-    # literal.
-    export POD_NAME POOL
-    python3 - <<'PY' | kubectl create -f -
-    import os
-    import sys
-    import textwrap
+    # Only these tokens are substituted; every other $ (for example in a
+    # custom command) passes through untouched. The three values are validated
+    # above to characters that are inert in a sed replacement.
+    render() {
+      sed -e "s|\${WORKER_SLUG}|${WORKER_SLUG}|g" \
+          -e "s|\${WORKER_ID}|${WORKER_ID}|g" \
+          -e "s|\${POOL}|${POOL}|g" \
+          "${HOOKS_DIR}/$1"
+    }
 
-    text = textwrap.dedent(r'''
+    echo "spawn-pod: kubectl create Pod ${WORKER_SLUG}-* pool=${POOL} namespace=${NAMESPACE}" >&2
+    render worker-pod.yaml | kubectl create -f -
+  worker-pod.yaml: |
 {{ include "cursor-worker-pool.workerPod" . | indent 4 }}
-    ''')
-    for key in ("POD_NAME", "POOL"):
-        value = os.environ.get(key)
-        if value is None:
-            sys.stderr.write("spawn-pod: missing %s\n" % key)
-            sys.exit(1)
-        text = text.replace("${%s}" % key, value)
-    sys.stdout.write(text)
-    PY
 {{- end }}
