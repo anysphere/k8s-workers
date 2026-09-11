@@ -3,5 +3,6 @@
 FROM python:3.12-slim
 COPY kubectl /usr/local/bin/kubectl
 COPY agent /usr/local/bin/agent
-RUN chmod 755 /usr/local/bin/kubectl /usr/local/bin/agent && mkdir -p /workspace
+RUN chmod 755 /usr/local/bin/kubectl /usr/local/bin/agent && mkdir -p /workspace /opt/seed \
+  && echo "seeded by the image" >/opt/seed/SEED.txt
 WORKDIR /workspace

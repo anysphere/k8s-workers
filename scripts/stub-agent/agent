@@ -106,6 +106,17 @@ def run_worker(argv):
     worker_dir = flags.get("worker-dir", [None])[0]
     if worker_dir:
         log(f"worker: worker-dir exists={os.path.isdir(worker_dir)}")
+    if worker_dir and os.path.isdir(worker_dir):
+        # Leave a per-episode marker so a wake can prove the workspace survived.
+        marker = os.path.join(worker_dir, ".stub-episodes")
+        prior = 0
+        if os.path.exists(marker):
+            with open(marker) as fh:
+                prior = sum(1 for _ in fh)
+        with open(marker, "a") as fh:
+            fh.write(os.environ.get("CURSOR_WORKER_NAME", "unknown") + "\n")
+        log(f"worker: prior episodes in workspace: {prior}")
+        log("worker: workspace entries: " + " ".join(sorted(os.listdir(worker_dir))))
     server = http.server.ThreadingHTTPServer((host or "0.0.0.0", int(port)), Health)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log("worker: connected+idle (stub); serving /healthz and /readyz")
