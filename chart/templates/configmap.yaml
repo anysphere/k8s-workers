@@ -14,8 +14,22 @@ data:
     # Exec'd by `agent worker controller --spawn`. Creates one worker Pod and
     # returns. Does not patch Deployments or HPA. Idle workers exit 0 after
     # --idle-release-timeout; restartPolicy Never makes that terminal. Warm-idle
-    # replacements are another invocation of this hook.
+    # replacements are another invocation of this hook. Needs only kubectl and
+    # a POSIX shell (sh, sed, tr, cut, date).
+    #
+    # CURSOR_WAKE=1 marks a wake: the controller is re-spawning a claimed
+    # worker id whose previous Pod already exited. With hibernation off it is
+    # ignored (fresh Pod, fresh workspace). With hibernation on:
+    #   no wake : create ws-<worker-id> if missing, mount it, stamp last-used.
+    #   wake    : require ws-<worker-id>; exit 3 without spawning when it is
+    #             missing or terminating so the pool's reconnect window lapses
+    #             into a normal fresh claim.
     set -eu
+
+    HOOKS_DIR="$(cd "$(dirname "$0")" && pwd)"
+    NAMESPACE={{ .Release.Namespace | quote }}
+    HIBERNATION={{ ternary "1" "0" .Values.hibernation.enabled | quote }}
+    WAKE="${CURSOR_WAKE:-}"
 
     if ! command -v kubectl >/dev/null 2>&1; then
       echo "spawn-pod: kubectl not found on PATH; the controller image must include kubectl" >&2
@@ -27,6 +41,12 @@ data:
       echo "spawn-pod: CURSOR_AGENT_WORKER_ID is required" >&2
       exit 1
     fi
+    case "${WORKER_ID}" in
+      *[!a-zA-Z0-9._-]*)
+        echo "spawn-pod: refusing to interpolate unsafe CURSOR_AGENT_WORKER_ID" >&2
+        exit 1
+        ;;
+    esac
 
     POOL="${CURSOR_POOL:-{{ .Values.pool }}}"
     case "${POOL}" in
@@ -36,31 +56,98 @@ data:
         ;;
     esac
 
-    POD_NAME="$(printf '%s' "${WORKER_ID}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g;s/^-*//;s/-*$//;s/--*/-/g' | cut -c1-63)"
-    if [ -z "${POD_NAME}" ]; then
-      echo "spawn-pod: could not derive a DNS-1123 pod name from CURSOR_AGENT_WORKER_ID" >&2
+    # DNS-1123 form of the worker id for Kubernetes names and labels. 57 chars
+    # leaves room for the generateName suffix within the 63-char limit.
+    WORKER_SLUG="$(printf '%s' "${WORKER_ID}" | tr '[:upper:]' '[:lower:]' \
+      | sed 's/[^a-z0-9-]/-/g;s/^-*//;s/--*/-/g' | cut -c1-57 | sed 's/-*$//')"
+    if [ -z "${WORKER_SLUG}" ]; then
+      echo "spawn-pod: could not derive a DNS-1123 name from CURSOR_AGENT_WORKER_ID" >&2
       exit 1
     fi
 
-    echo "spawn-pod: kubectl create Pod ${POD_NAME} pool=${POOL} namespace={{ .Release.Namespace }}" >&2
-    # Worker start uses the CLI auth default to mint a session. Export so the
-    # quoted python heredoc can substitute POD_NAME / POOL; $ in command stays
-    # literal.
-    export POD_NAME POOL
-    python3 - <<'PY' | kubectl create -f -
-    import os
-    import sys
-    import textwrap
+    # Only these tokens are substituted; every other $ (for example in a
+    # custom command) passes through untouched. The three values are validated
+    # above to characters that are inert in a sed replacement.
+    render() {
+      sed -e "s|\${WORKER_SLUG}|${WORKER_SLUG}|g" \
+          -e "s|\${WORKER_ID}|${WORKER_ID}|g" \
+          -e "s|\${POOL}|${POOL}|g" \
+          "${HOOKS_DIR}/$1"
+    }
 
-    text = textwrap.dedent(r'''
+    if [ "${HIBERNATION}" = "1" ]; then
+      PVC_NAME="ws-${WORKER_SLUG}"
+      if state="$(kubectl -n "${NAMESPACE}" get pvc "${PVC_NAME}" \
+          -o 'jsonpath={.status.phase}/{.metadata.deletionTimestamp}' 2>&1)"; then
+        case "${state}" in
+          */) pvc=present ;;
+          *) pvc=terminating ;;
+        esac
+      else
+        case "${state}" in
+          *NotFound*|*"not found"*) pvc=missing ;;
+          *)
+            echo "spawn-pod: kubectl get pvc ${PVC_NAME} failed: ${state}" >&2
+            exit 1
+            ;;
+        esac
+      fi
+      case "${pvc}" in
+        present) ;;
+        terminating)
+          if [ "${WAKE}" = "1" ]; then
+            echo "spawn-pod: wake for ${WORKER_ID} but ${PVC_NAME} is terminating; not spawning so the reconnect window lapses into a fresh claim" >&2
+            exit 3
+          fi
+          # A new Pod cannot mount a terminating claim and create would hit
+          # AlreadyExists. Fail so the controller retries once it is gone.
+          echo "spawn-pod: ${PVC_NAME} is terminating (${state}); refusing to spawn" >&2
+          exit 1
+          ;;
+        missing)
+          if [ "${WAKE}" = "1" ]; then
+            echo "spawn-pod: wake for ${WORKER_ID} but ${PVC_NAME} is gone; not spawning so the reconnect window lapses into a fresh claim" >&2
+            exit 3
+          fi
+          echo "spawn-pod: kubectl create PVC ${PVC_NAME} namespace=${NAMESPACE}" >&2
+          render workspace-pvc.yaml | kubectl create -f -
+          ;;
+      esac
+      kubectl -n "${NAMESPACE}" annotate pvc "${PVC_NAME}" --overwrite \
+        "cursor.com/last-used-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "cursor.com/last-used-epoch=$(date +%s)" >/dev/null
+    fi
+
+    echo "spawn-pod: kubectl create Pod ${WORKER_SLUG}-* pool=${POOL} namespace=${NAMESPACE} wake=${WAKE:-0} hibernation=${HIBERNATION}" >&2
+    render worker-pod.yaml | kubectl create -f -
+  worker-pod.yaml: |
 {{ include "cursor-worker-pool.workerPod" . | indent 4 }}
-    ''')
-    for key in ("POD_NAME", "POOL"):
-        value = os.environ.get(key)
-        if value is None:
-            sys.stderr.write("spawn-pod: missing %s\n" % key)
-            sys.exit(1)
-        text = text.replace("${%s}" % key, value)
-    sys.stdout.write(text)
-    PY
+  {{- if .Values.hibernation.enabled }}
+  workspace-pvc.yaml: |
+{{ include "cursor-worker-pool.workspacePvc" . | indent 4 }}
+  entrypoint.sh: |
+    #!/bin/sh
+    # Runs inside the worker container before the agent CLI. The workspace
+    # PVC is mounted at WORKER_DIR and shadows whatever the image baked there,
+    # so a first-use volume is seeded here; a wake finds it populated and
+    # skips straight to exec.
+    set -eu
+    WORKER_DIR={{ .Values.workerDir | quote }}
+    SEED_PATH={{ .Values.hibernation.seed.fromPath | quote }}
+    CLONE_URL={{ .Values.hibernation.seed.cloneUrl | quote }}
+
+    mkdir -p "${WORKER_DIR}"
+    if [ -n "$(ls -A "${WORKER_DIR}" 2>/dev/null)" ]; then
+      echo "entrypoint: workspace ${WORKER_DIR} already populated; resuming" >&2
+    elif [ -n "${SEED_PATH}" ]; then
+      echo "entrypoint: seeding ${WORKER_DIR} from ${SEED_PATH}" >&2
+      cp -a "${SEED_PATH}/." "${WORKER_DIR}/"
+    elif [ -n "${CLONE_URL}" ]; then
+      echo "entrypoint: cloning ${CLONE_URL} into ${WORKER_DIR}" >&2
+      git clone -- "${CLONE_URL}" "${WORKER_DIR}"
+    else
+      echo "entrypoint: ${WORKER_DIR} is empty; leaving it to the agent" >&2
+    fi
+    exec "$@"
+  {{- end }}
 {{- end }}

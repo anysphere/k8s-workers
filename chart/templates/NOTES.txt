@@ -6,5 +6,34 @@ the WorkerDeployment operator.
 
 Pool: {{ .Values.pool }}
 Controller warmIdle: {{ .Values.controller.warmIdle | default 0 }}
+Hibernation: {{ ternary "ON" "off (one-shot Pods, no PersistentVolumeClaims)" .Values.hibernation.enabled }}
+{{- if .Values.hibernation.enabled }}
+
+Hibernation is enabled on the cluster side. Cursor still treats every
+follow-up as a fresh claim until the pool has a reconnect window. Run this
+once with the pool's service account key (team-scoped, not repo-scoped):
+
+  curl --request POST \
+    --url "https://api.cursor.com/v0/private-workers/pools" \
+    -u "$CURSOR_API_KEY:" \
+    --header 'Content-Type: application/json' \
+    --data '{"scope":"team","poolName":"{{ .Values.pool }}","workerReadyTimeoutSeconds":{{ .Values.hibernation.wakeWindowSeconds | int }}}'
+
+Omitting workerReadyTimeoutSeconds on a later call never resets it; pass 0
+to turn the window off again.
+
+Workspace volumes: ws-<worker-id>, {{ .Values.hibernation.size }}{{ with .Values.hibernation.storageClassName }}, storageClass {{ . }}{{ else }}, cluster default storageClass{{ end }},
+mounted at {{ .Values.workerDir }}{{ if .Values.hibernation.mountHome }} and {{ .Values.hibernation.homeDir }}{{ end }}.
+{{- if .Values.hibernation.reaper.enabled }}
+Reaper: CronJob {{ include "cursor-worker-pool.reaperName" . }} ({{ .Values.hibernation.reaper.schedule }}) deletes PVCs unused for
+{{ .Values.hibernation.pvcTtl }} and finished worker Pods older than {{ .Values.hibernation.podTtl }}.
+{{- else }}
+Reaper: disabled. Nothing deletes ws-* PVCs or finished worker Pods; do it yourself.
+{{- end }}
+
+Keep idleReleaseTimeout ({{ .Values.idleReleaseTimeout }}s) above the worst-case wake time, and the
+wake inside the {{ .Values.hibernation.wakeWindowSeconds }}s window: schedule, image pull, volume attach, connect,
+plus node scale-up when the cluster is at zero.
+{{- end }}
 
 See chart/README.md for install and values.

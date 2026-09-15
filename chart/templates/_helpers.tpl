@@ -116,6 +116,60 @@ Pull policy for the controller container.
 {{- end -}}
 
 {{/*
+Reaper CronJob / ServiceAccount / Role / ConfigMap name (fullname + "-reaper").
+*/}}
+{{- define "cursor-worker-pool.reaperName" -}}
+{{- printf "%s-reaper" (include "cursor-worker-pool.fullname" . | trunc 56 | trimSuffix "-") -}}
+{{- end -}}
+
+{{/*
+Reaper image: hibernation.reaper.image.repository if set, otherwise the
+controller image (which already has kubectl).
+*/}}
+{{- define "cursor-worker-pool.reaperImage" -}}
+{{- if .Values.hibernation.reaper.image.repository -}}
+{{- $repository := .Values.hibernation.reaper.image.repository -}}
+{{- if .Values.hibernation.reaper.image.digest -}}
+{{- printf "%s@%s" $repository .Values.hibernation.reaper.image.digest -}}
+{{- else -}}
+{{- $tag := required "hibernation.reaper.image.tag is required when hibernation.reaper.image.repository is set" .Values.hibernation.reaper.image.tag | toString -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- else -}}
+{{- include "cursor-worker-pool.controllerImage" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "cursor-worker-pool.reaperPullPolicy" -}}
+{{- if .Values.hibernation.reaper.image.pullPolicy -}}
+{{- .Values.hibernation.reaper.image.pullPolicy -}}
+{{- else -}}
+{{- include "cursor-worker-pool.controllerPullPolicy" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Duration string to whole seconds. Accepts a bare integer (seconds) or
+<n>s, <n>m, <n>h, <n>d. Anything else fails the render.
+*/}}
+{{- define "cursor-worker-pool.durationSeconds" -}}
+{{- $s := . | toString -}}
+{{- if regexMatch "^[0-9]+$" $s -}}
+{{- $s -}}
+{{- else if regexMatch "^[0-9]+[smhd]$" $s -}}
+{{- $n := regexFind "^[0-9]+" $s | int64 -}}
+{{- $u := regexFind "[smhd]$" $s -}}
+{{- if eq $u "s" -}}{{ $n }}
+{{- else if eq $u "m" -}}{{ mul $n 60 }}
+{{- else if eq $u "h" -}}{{ mul $n 3600 }}
+{{- else -}}{{ mul $n 86400 }}
+{{- end -}}
+{{- else -}}
+{{- fail (printf "invalid duration %q: use <n>s, <n>m, <n>h or <n>d (for example 72h)" $s) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Port parsed from managementAddr (host:port or :port or port).
 */}}
 {{- define "cursor-worker-pool.managementPort" -}}
@@ -146,30 +200,120 @@ Required calls are assigned so this helper emits no YAML.
 {{- if and .Values.controller.enabled (not .Values.serviceAccount.automount) -}}
 {{- fail "controller.enabled requires serviceAccount.automount=true so kubectl in the spawn hook can create Pods." -}}
 {{- end -}}
+{{- if .Values.hibernation.enabled -}}
+{{- if not .Values.controller.enabled -}}
+{{- fail "hibernation.enabled requires controller.enabled=true (the spawn hook creates and mounts the workspace PVCs)." -}}
+{{- end -}}
+{{- if not .Values.workerDir -}}
+{{- fail "hibernation.enabled requires workerDir (the workspace PVC is mounted there)." -}}
+{{- end -}}
+{{- $_ := required "hibernation.size is required" .Values.hibernation.size -}}
+{{- if not .Values.hibernation.accessModes -}}
+{{- fail "hibernation.accessModes must list at least one access mode." -}}
+{{- end -}}
+{{- $window := .Values.hibernation.wakeWindowSeconds | int -}}
+{{- if or (lt $window 1) (gt $window 3600) -}}
+{{- fail "hibernation.wakeWindowSeconds must be 1..3600 (the pool's workerReadyTimeoutSeconds)." -}}
+{{- end -}}
+{{- if and .Values.hibernation.mountHome (not .Values.hibernation.homeDir) -}}
+{{- fail "hibernation.mountHome requires hibernation.homeDir." -}}
+{{- end -}}
+{{- if and .Values.hibernation.seed.fromPath .Values.hibernation.seed.cloneUrl -}}
+{{- fail "set only one of hibernation.seed.fromPath and hibernation.seed.cloneUrl." -}}
+{{- end -}}
+{{- $_ := include "cursor-worker-pool.durationSeconds" .Values.hibernation.pvcTtl -}}
+{{- $_ := include "cursor-worker-pool.durationSeconds" .Values.hibernation.podTtl -}}
+{{- if and .Values.hibernation.reaper.enabled (not .Values.hibernation.reaper.schedule) -}}
+{{- fail "hibernation.reaper.schedule is required when the reaper is enabled." -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
-Pod manifest kubectl-created by the spawn hook. Column-0 YAML; runtime
-shell variables are ${POD_NAME} and ${POOL}. restartPolicy is Never so an
-idle-release exit is terminal.
+Worker CLI arguments shared by the plain and hibernation Pod shapes.
+*/}}
+{{- define "cursor-worker-pool.workerArgs" -}}
+- worker
+- --pool
+- "${POOL}"
+- --idle-release-timeout
+- {{ .Values.idleReleaseTimeout | int | quote }}
+{{- if .Values.workerDir }}
+- --worker-dir
+- {{ .Values.workerDir | quote }}
+{{- end }}
+- --management-addr
+- {{ .Values.managementAddr | quote }}
+{{- range .Values.labels }}
+- --label
+- {{ . | quote }}
+{{- end }}
+{{- range .Values.extraArgs }}
+- {{ . | quote }}
+{{- end }}
+- start
+{{- end -}}
+
+{{/*
+PersistentVolumeClaim kubectl-created by the spawn hook when hibernation is
+on. Same ${WORKER_SLUG} / ${WORKER_ID} / ${POOL} tokens as the Pod. The
+last-used annotations are stamped by the hook on every spawn and wake; the
+reaper reads last-used-epoch.
+*/}}
+{{- define "cursor-worker-pool.workspacePvc" -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: "ws-${WORKER_SLUG}"
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ include "cursor-worker-pool.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: workspace
+    cursor.com/worker-id: "${WORKER_SLUG}"
+  annotations:
+    cursor.com/worker-id: "${WORKER_ID}"
+    cursor.com/pool: "${POOL}"
+spec:
+  accessModes:
+    {{- toYaml .Values.hibernation.accessModes | nindent 4 }}
+  {{- with .Values.hibernation.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.hibernation.size | quote }}
+{{- end -}}
+
+{{/*
+Pod manifest kubectl-created by the spawn hook. Column-0 YAML. The hook
+substitutes exactly three tokens with sed: ${WORKER_SLUG} (DNS-1123 form of
+the worker id, used for Kubernetes names and labels), ${WORKER_ID} (the id
+the controller claimed, passed to the worker verbatim) and ${POOL}.
+generateName gives every episode its own Pod name so a wake never collides
+with the previous Succeeded Pod. restartPolicy is Never so an idle-release
+exit is terminal.
 */}}
 {{- define "cursor-worker-pool.workerPod" -}}
 apiVersion: v1
 kind: Pod
 metadata:
-  name: ${POD_NAME}
+  generateName: "${WORKER_SLUG}-"
   namespace: {{ .Release.Namespace | quote }}
   labels:
     app.kubernetes.io/name: {{ include "cursor-worker-pool.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: worker
+    cursor.com/worker-id: "${WORKER_SLUG}"
     {{- with .Values.podLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- with .Values.podAnnotations }}
   annotations:
+    cursor.com/worker-id: "${WORKER_ID}"
+    cursor.com/pool: "${POOL}"
+    {{- with .Values.podAnnotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false
@@ -189,28 +333,20 @@ spec:
     - name: worker
       image: {{ include "cursor-worker-pool.image" . | quote }}
       imagePullPolicy: {{ .Values.image.pullPolicy }}
+      {{- if .Values.hibernation.enabled }}
+      {{- /* The entrypoint seeds an empty workspace volume, then execs the configured command with the worker arguments. */}}
+      command:
+        - /bin/sh
+        - /cursor-hooks/entrypoint.sh
+      args:
+        {{- toYaml .Values.command | nindent 8 }}
+        {{- include "cursor-worker-pool.workerArgs" . | nindent 8 }}
+      {{- else }}
       command:
         {{- toYaml .Values.command | nindent 8 }}
       args:
-        - worker
-        - --pool
-        - ${POOL}
-        - --idle-release-timeout
-        - {{ .Values.idleReleaseTimeout | int | quote }}
-        {{- if .Values.workerDir }}
-        - --worker-dir
-        - {{ .Values.workerDir | quote }}
-        {{- end }}
-        - --management-addr
-        - {{ .Values.managementAddr | quote }}
-        {{- range .Values.labels }}
-        - --label
-        - {{ . | quote }}
-        {{- end }}
-        {{- range .Values.extraArgs }}
-        - {{ . | quote }}
-        {{- end }}
-        - start
+        {{- include "cursor-worker-pool.workerArgs" . | nindent 8 }}
+      {{- end }}
       env:
         - name: CURSOR_API_KEY
           valueFrom:
@@ -218,11 +354,13 @@ spec:
               name: {{ include "cursor-worker-pool.secretName" . }}
               key: {{ .Values.auth.secretKey | quote }}
         - name: CURSOR_POOL
-          value: ${POOL}
+          value: "${POOL}"
         - name: CURSOR_AGENT_WORKER_ID
-          value: ${POD_NAME}
+          value: "${WORKER_ID}"
         - name: CURSOR_WORKER_NAME
-          value: ${POD_NAME}
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -248,13 +386,42 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.extraVolumeMounts }}
+      {{- if or .Values.hibernation.enabled .Values.extraVolumeMounts }}
       volumeMounts:
+        {{- if .Values.hibernation.enabled }}
+        - name: workspace
+          mountPath: {{ .Values.workerDir | quote }}
+          subPath: workspace
+        {{- if .Values.hibernation.mountHome }}
+        - name: workspace
+          mountPath: {{ .Values.hibernation.homeDir | quote }}
+          subPath: home
+        {{- end }}
+        - name: cursor-hooks
+          mountPath: /cursor-hooks
+          readOnly: true
+        {{- end }}
+        {{- with .Values.extraVolumeMounts }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
-  {{- with .Values.extraVolumes }}
+  {{- if or .Values.hibernation.enabled .Values.extraVolumes }}
   volumes:
+    {{- if .Values.hibernation.enabled }}
+    - name: workspace
+      persistentVolumeClaim:
+        claimName: "ws-${WORKER_SLUG}"
+    - name: cursor-hooks
+      configMap:
+        name: {{ include "cursor-worker-pool.spawnConfigMapName" . }}
+        defaultMode: 0755
+        items:
+          - key: entrypoint.sh
+            path: entrypoint.sh
+    {{- end }}
+    {{- with .Values.extraVolumes }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
   {{- with .Values.nodeSelector }}
   nodeSelector:
