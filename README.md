@@ -8,7 +8,7 @@ worker runs tool calls inside your cluster network.
 For the published `worker-set-controller` / `WorkerDeployment` path, see
 [Deploying with Kubernetes](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes).
 Use this sample for controller `--spawn` Pods (claim-then-spawn or
-`--warm-idle`) without a CRD.
+`--warm-idle`).
 
 ## How it works
 
@@ -38,25 +38,41 @@ Use this sample for controller `--spawn` Pods (claim-then-spawn or
 
 Product semantics:
 [Self-hosted pools](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool)
-([repo-less / Any repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#repo-less-pools),
+([Any repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#any-repo-pools),
 [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#pool-names),
 [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#register-multiple-repo-roots)).
 `repo` and `pool` labels are reserved; the worker derives `repo=` from a git
 remote when one exists.
 
-**This template’s default:** `pool: default` on the controller and every
-spawned worker. Build your worker image so `/workspace` (or `workerDir`) is
-either a clone with a remote (repo-bound) or a directory without a git remote
-(any-repo). Keep Helm `pool` and the dashboard pool name the same.
+**This template’s chart default is `pool: default`.** That is the unnamed pool
+the CLI joins when `--pool` has no name. A repo-backed `default` pool shows
+under that repository. An any-repo fleet uses a name of its own (`k8s-workers`
+in the examples below) so it appears under **Any repo**. Register that name
+with `POST /v0/private-workers/pools` (omit repo fields) so the picker lists it
+before a worker connects. Keep Helm `pool` and the dashboard pool name the same.
+
+Build the worker image so `workerDir` is either a clone with a remote
+(repo-bound) or a directory with no git remote (any-repo).
 
 ### Any-repo mode
 
 Dashboard: **Any repo**. Docs:
-[repo-less pools](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#repo-less-pools).
-Routing is by **pool name**. Users specify the pool when starting an agent:
-the dashboard **Any repo** group, `pool=<name>` on Slack/GitHub/Linear, or the
-API with `env.type: "pool"` and `env.name`, omitting `repos`. Those starts
-leave off `repo=` labels.
+[Any repo pools](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#any-repo-pools).
+Routing is by **pool name**. Give the fleet a name other than `default`, then
+register it:
+
+```bash
+curl --request POST \
+  --url "https://api.cursor.com/v0/private-workers/pools" \
+  -u "$CURSOR_API_KEY:" \
+  --header 'Content-Type: application/json' \
+  --data '{"scope":"team","poolName":"k8s-workers"}'
+```
+
+Users specify that name when starting an agent: the dashboard **Any repo**
+group, `pool=k8s-workers` on Slack/GitHub/Linear, or the API with
+`env.type: "pool"` and `env.name`, omitting `repos`. Those starts leave off
+`repo=` labels.
 
 Controller (what Helm runs):
 
@@ -95,6 +111,32 @@ worker image or via `extraEnv` / mounted credentials.
 Optional controller filter: set `controller.repository` so the controller
 only handles pending requests for that repository identity.
 
+### Many repositories
+
+One named any-repo pool covers a large GitHub Enterprise fleet. Routing is
+the pool name, not a baked remote, so thousands of repos share the same image
+and controller.
+
+- Register the pool up front (the curl above) so it stays in the picker with
+  zero connected workers.
+- Leave `workerDir` as an empty directory. A git remote in that directory
+  makes the worker repo-bound to that one remote.
+- Put `git`, your GHE credentials, and the build tools a session needs in the
+  image. Clone the claimed repo in the session, or from a `sessionStart` hook
+  in `workerDir`, with those credentials. A shallow clone of the one repo the
+  agent is starting is the working set; the image stays the same for every
+  repo.
+- `--clone-git-repos` clones with a minted GitHub token. That path needs the
+  GitHub App to reach the host, and it applies to a named pool other than
+  `default`. A private GHE server is cloned by the image with its own
+  credentials.
+- Claim-mode spawn env includes `CURSOR_REPO_URL` when the request targets a
+  repository. An Any repo start omits `repos`, so that variable is unset and
+  the session does the clone.
+- `controller.warmIdle` covers process startup. Time to first edit is then
+  the clone. Raise `idleReleaseTimeout` so a follow-up reuses that checkout.
+  Start with a small idle count; one warm controller per pool.
+
 ## Controller modes (claim vs warm idle)
 
 Independent of any-repo vs repo-bound.
@@ -128,7 +170,11 @@ controller Deployment so a rollout keeps a single controller.
 - A [service account API key](https://cursor.com/docs/account/enterprise/service-accounts)
   for pool workers (personal API keys are rejected)
 - A worker container image that includes:
-  - the `agent` / `cursor-agent` CLI
+  - the `agent` / `cursor-agent` CLI. Warm reconcile parses
+    `GET /v0/private-workers/pools`, including `workerReadyTimeoutSeconds`.
+    `2026.09.03-a76a283` accepts that field.
+    `cursor.com/install` currently installs `2026.09.10-fd3934a`, which reports
+    `unrecognized_keys: workerReadyTimeoutSeconds` and never spawns.
   - `git` on `PATH` (required for git remotes / `--clone-git-repos`)
   - a workspace directory at `workerDir` (default `/workspace`)
 - The controller container also needs `kubectl` on `PATH` (override
@@ -153,14 +199,14 @@ controller Deployment so a rollout keeps a single controller.
      -n cursord
    ```
 
-3. Install the chart (claim-then-spawn, pool `default`).
+3. Install the chart (claim-then-spawn, named any-repo pool).
 
    ```bash
    helm upgrade --install my-workers ./chart \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
-     --set pool=default \
+     --set pool=k8s-workers \
      --set controller.warmIdle=0 \
      --set auth.existingSecret=cursor-workers-api-key
    ```
@@ -172,7 +218,7 @@ controller Deployment so a rollout keeps a single controller.
      --namespace cursord \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
-     --set pool=default \
+     --set pool=k8s-workers \
      --set controller.warmIdle=3 \
      --set auth.existingSecret=cursor-workers-api-key
    ```
@@ -185,7 +231,7 @@ controller Deployment so a rollout keeps a single controller.
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
-     --set pool=default \
+     --set pool=k8s-workers \
      --set auth.apiKey='YOUR_SERVICE_ACCOUNT_API_KEY'
    ```
 
@@ -222,7 +268,7 @@ Full values reference: [chart/README.md](chart/README.md).
 
 1. Open [cursor.com/agents](https://cursor.com/agents).
 2. Start an agent, pick the **Any repo** group, and choose the pool name
-   (`default` unless you overrode `pool`).
+   (`k8s-workers` unless you overrode `pool`).
 3. From Slack/GitHub/Linear use `pool=<name>`. From the API use
    `env.type: "pool"` and `env.name`, and omit `repos`.
 4. With `controller.warmIdle=0`, the controller claims and spawns a Pod.
@@ -253,9 +299,9 @@ Useful while iterating on the spawn hook or image.
    ```bash
    export CURSOR_API_KEY='YOUR_SERVICE_ACCOUNT_API_KEY'
 
-   agent worker controller --spawn ./path/to/spawn-pod.sh --pool default
+   agent worker controller --spawn ./path/to/spawn-pod.sh --pool k8s-workers
    # warm idle:
-   # agent worker controller --spawn ./path/to/spawn-pod.sh --pool default --warm-idle 2
+   # agent worker controller --spawn ./path/to/spawn-pod.sh --pool k8s-workers --warm-idle 2
    ```
 
 Point `--spawn` at a script equivalent to the chart ConfigMap hook
@@ -293,6 +339,8 @@ Only worker Pods serve these endpoints.
 | `HTTP 401` / invalid API key | Use a **service account** key with agent scope, not a personal key |
 | Pods spawn then exit immediately | Image has `agent` + `git`; `workerDir` exists; check worker logs |
 | Agent cannot find the pool under a repo | You started any-repo (no `repo=` labels). Pick **Any repo**, or bake a git remote for repo-bound |
+| Pool missing from the web UI | Register a named pool (`POST /v0/private-workers/pools`, no repo fields) and set Helm `pool` to that name. `default` is the unnamed pool; a repo-backed `default` pool shows under its repository |
+| `unrecognized_keys` / `workerReadyTimeoutSeconds` | Controller CLI is older than the pools response. Use a build that accepts that field (`2026.09.03-a76a283` does; `2026.09.10-fd3934a` from `cursor.com/install` does not) |
 | Warm idle overshoots | Only one controller per pool; chart uses Recreate — avoid a second Helm release on the same pool with `warmIdle>0` |
 | Controller CrashLoop | Controller image missing `kubectl` or `agent`; RBAC Role cannot create Pods; Secret key name ≠ `auth.secretKey` |
 
@@ -302,13 +350,13 @@ Only worker Pods serve these endpoints.
 | --- | --- |
 | `readyReplicas` = idle workers; busy-safe rolling updates | `--warm-idle` or claim-then-spawn; one-shot Pods |
 | Operator token exchange + `--auth-token-file` | Long-lived `CURSOR_API_KEY` Secret |
-| CRD + `worker-set-controller` | Vanilla Pods via `--spawn` |
+| `WorkerDeployment` + `worker-set-controller` | Vanilla Pods via `--spawn` |
 | Optional demand autoscaling / scale-to-zero | Claim-then-spawn (`warmIdle=0`) or fixed idle via `--warm-idle` |
 
 ## Related resources
 
 - [Self-Hosted Pool](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool)
-  ([Any repo / repo-less](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#repo-less-pools),
+  ([Any repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#any-repo-pools),
   [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#pool-names),
   [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#register-multiple-repo-roots))
 - [Deploying with Kubernetes](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes) (operator path)
