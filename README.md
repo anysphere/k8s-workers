@@ -173,8 +173,6 @@ controller Deployment so a rollout keeps a single controller.
   - the `agent` / `cursor-agent` CLI. Warm reconcile parses
     `GET /v0/private-workers/pools`, including `workerReadyTimeoutSeconds`.
     `2026.09.03-a76a283` accepts that field.
-    `cursor.com/install` currently installs `2026.09.10-fd3934a`, which reports
-    `unrecognized_keys: workerReadyTimeoutSeconds` and never spawns.
   - `git` on `PATH` (required for git remotes / `--clone-git-repos`)
   - a workspace directory at `workerDir` (default `/workspace`)
 - The controller container also needs `kubectl` on `PATH` (override
@@ -340,7 +338,7 @@ Only worker Pods serve these endpoints.
 | Pods spawn then exit immediately | Image has `agent` + `git`; `workerDir` exists; check worker logs |
 | Agent cannot find the pool under a repo | You started any-repo (no `repo=` labels). Pick **Any repo**, or bake a git remote for repo-bound |
 | Pool missing from the web UI | Register a named pool (`POST /v0/private-workers/pools`, no repo fields) and set Helm `pool` to that name. `default` is the unnamed pool; a repo-backed `default` pool shows under its repository |
-| `unrecognized_keys` / `workerReadyTimeoutSeconds` | Controller CLI is older than the pools response. Use a build that accepts that field (`2026.09.03-a76a283` does; `2026.09.10-fd3934a` from `cursor.com/install` does not) |
+| `unrecognized_keys` / `workerReadyTimeoutSeconds` | Controller CLI is older than the pools response. Use a build that accepts that field (`2026.09.03-a76a283` does) |
 | Warm idle overshoots | Only one controller per pool; chart uses Recreate — avoid a second Helm release on the same pool with `warmIdle>0` |
 | Controller CrashLoop | Controller image missing `kubectl` or `agent`; RBAC Role cannot create Pods; Secret key name ≠ `auth.secretKey` |
 
