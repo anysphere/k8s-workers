@@ -13,8 +13,6 @@ rules:
     resources: ["pods"]
     verbs: ["create", "get", "list"]
   {{- if .Values.hibernation.enabled }}
-  # Spawn hook: create-if-missing ws-<worker-id>, and patch for the
-  # last-used annotations the reaper reads.
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["create", "get", "list", "patch"]

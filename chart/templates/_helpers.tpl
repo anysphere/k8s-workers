@@ -124,7 +124,7 @@ Reaper CronJob / ServiceAccount / Role / ConfigMap name (fullname + "-reaper").
 
 {{/*
 Reaper image: hibernation.reaper.image.repository if set, otherwise the
-controller image (which already has kubectl).
+controller image.
 */}}
 {{- define "cursor-worker-pool.reaperImage" -}}
 {{- if .Values.hibernation.reaper.image.repository -}}
@@ -165,7 +165,7 @@ Duration string to whole seconds. Accepts a bare integer (seconds) or
 {{- else -}}{{ mul $n 86400 }}
 {{- end -}}
 {{- else -}}
-{{- fail (printf "invalid duration %q: use <n>s, <n>m, <n>h or <n>d (for example 72h)" $s) -}}
+{{- fail (printf "invalid duration %q: use <n>s, <n>m, <n>h or <n>d (for example 7d)" $s) -}}
 {{- end -}}
 {{- end -}}
 
@@ -255,10 +255,8 @@ Worker CLI arguments shared by the plain and hibernation Pod shapes.
 {{- end -}}
 
 {{/*
-PersistentVolumeClaim kubectl-created by the spawn hook when hibernation is
-on. Same ${WORKER_SLUG} / ${WORKER_ID} / ${POOL} tokens as the Pod. The
-last-used annotations are stamped by the hook on every spawn and wake; the
-reaper reads last-used-epoch.
+PVC the spawn hook creates when hibernation is on. Same ${WORKER_SLUG},
+${WORKER_ID}, and ${POOL} tokens as the Pod.
 */}}
 {{- define "cursor-worker-pool.workspacePvc" -}}
 apiVersion: v1
@@ -287,12 +285,8 @@ spec:
 
 {{/*
 Pod manifest kubectl-created by the spawn hook. Column-0 YAML. The hook
-substitutes exactly three tokens with sed: ${WORKER_SLUG} (DNS-1123 form of
-the worker id, used for Kubernetes names and labels), ${WORKER_ID} (the id
-the controller claimed, passed to the worker verbatim) and ${POOL}.
-generateName gives every episode its own Pod name so a wake never collides
-with the previous Succeeded Pod. restartPolicy is Never so an idle-release
-exit is terminal.
+substitutes ${WORKER_SLUG}, ${WORKER_ID}, and ${POOL}. restartPolicy is Never
+so an idle-release exit is terminal.
 */}}
 {{- define "cursor-worker-pool.workerPod" -}}
 apiVersion: v1
@@ -334,7 +328,6 @@ spec:
       image: {{ include "cursor-worker-pool.image" . | quote }}
       imagePullPolicy: {{ .Values.image.pullPolicy }}
       {{- if .Values.hibernation.enabled }}
-      {{- /* The entrypoint seeds an empty workspace volume, then execs the configured command with the worker arguments. */}}
       command:
         - /bin/sh
         - /cursor-hooks/entrypoint.sh

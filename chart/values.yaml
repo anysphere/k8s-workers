@@ -77,35 +77,14 @@ controller:
     limits:
       memory: 512Mi
 
-# Opt-in workspace hibernation. Off by default, and off means exactly the
-# chart you have without this block: one-shot Pods, no PersistentVolumeClaims,
-# no CronJob, no extra RBAC.
-#
-# Hibernation needs two independent gates, both default off:
-#   1. hibernation.enabled=true here (cluster side).
-#   2. A non-zero workerReadyTimeoutSeconds on the pool in Cursor
-#      (POST /v0/private-workers/pools). NOTES.txt prints the call. Without it
-#      Cursor never asks for a wake, and the PVCs are created but never reused.
-#
-# What it does when on: each worker id gets a PersistentVolumeClaim
-# ws-<worker-id> mounted at workerDir. The worker still exits 0 after
-# idleReleaseTimeout and its Pod goes Succeeded, but the volume stays. When a
-# follow-up arrives inside the pool's window, the controller runs the spawn
-# hook with CURSOR_WAKE=1 and the same worker id; the hook mounts the same
-# PVC into a new Pod and the agent resumes on its files. Disk only: processes,
-# tmux sessions, and anything outside the mounted paths do not survive.
+# Per-worker workspace volume across idle exits. Off by default. Also needs a
+# non-zero workerReadyTimeoutSeconds on the pool; NOTES.txt prints the call.
 hibernation:
   enabled: false
-  # Reconnect window to set on the pool in Cursor (workerReadyTimeoutSeconds,
-  # 1..3600). Printed in NOTES.txt; the chart cannot set it on the pool itself.
-  # Wake (schedule + image pull + volume attach + connect + node scale-up) must
-  # finish inside this window and inside idleReleaseTimeout.
+  # Reconnect window to set on the pool (workerReadyTimeoutSeconds, 1..3600).
+  # Printed in NOTES.txt; the chart cannot set it on the pool itself.
   wakeWindowSeconds: 900
-  # Per-worker PVC spec. Empty storageClassName uses the default StorageClass.
-  # A cluster with no default leaves the claim Pending ("no storage class is
-  # set"). Prefer a class with volumeBindingMode: WaitForFirstConsumer and
-  # encryption at rest: the volume holds a checkout and possibly credential
-  # residue.
+  # Empty uses the default StorageClass. No default leaves the claim Pending.
   storageClassName: ""
   size: 20Gi
   accessModes:
@@ -136,8 +115,7 @@ hibernation:
     enabled: true
     schedule: "*/15 * * * *"
     # Image with kubectl and a POSIX shell. Empty uses the controller image.
-    # The Job runs reaper.sh, not `command`, so a start script that installs
-    # kubectl for the controller does not apply here.
+    # Does not run `command`.
     image:
       repository: ""
       tag: ""
