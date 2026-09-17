@@ -56,7 +56,7 @@ helm upgrade --install my-workers ./chart \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
-  --set pool=default \
+  --set pool=k8s-workers \
   --set controller.warmIdle=3 \
   --set auth.existingSecret=cursor-workers-api-key
 ```
@@ -173,7 +173,7 @@ its NOTES. Walkthrough, sizing, and caveats: root
 | `readyReplicas` = idle workers; claimed `/readyz` 503 triggers replacements | `--warm-idle` (optional) or claim-then-spawn; each worker is a Pod created by `--spawn` |
 | Busy-safe rolling updates (drain idle, wait for busy) | Controller uses Recreate; worker Pods are one-shot |
 | Operator token exchange + `--auth-token-file` rotation | Long-lived `CURSOR_API_KEY` from a Secret |
-| `WorkerDeployment` CRD + `worker-set-controller` | Vanilla Pods via `--spawn` |
+| `WorkerDeployment` + `worker-set-controller` | Vanilla Pods via `--spawn` |
 | Optional demand autoscaling / scale-to-zero | Claim-then-spawn if `warmIdle=0`; otherwise a fixed idle target via `--warm-idle` |
 
 Use the operator chart when you need those operator behaviors.
@@ -182,7 +182,7 @@ Use the operator chart when you need those operator behaviors.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `pool` | `default` | `--pool` name (controller and spawned workers) |
+| `pool` | `default` | `--pool` name. Use a name other than `default` for an any-repo fleet so it appears under Any repo |
 | `idleReleaseTimeout` | `600` | `--idle-release-timeout` seconds on worker Pods |
 | `workerDir` | `/workspace` | `--worker-dir`; empty omits the flag |
 | `managementAddr` | `0.0.0.0:8080` | `--management-addr` for `/readyz` and `/healthz` |

@@ -1,5 +1,7 @@
-# Cursor Self-Hosted Pool name passed to `agent worker controller --pool`
-# and to each spawned worker (`agent worker --pool`).
+# Pool name passed to `agent worker controller --pool` and each spawned worker.
+# Use a name such as `k8s-workers` for an any-repo fleet: the Any repo picker
+# lists that name. `default` is the unnamed pool the CLI joins when --pool has
+# no name; a repo-backed `default` pool shows under that repository.
 pool: default
 
 # Seconds a worker may stay connected after becoming idle before it exits 0.
