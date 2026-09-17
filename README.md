@@ -382,7 +382,7 @@ Cursor never deletes Kubernetes objects. A CronJob
 (`<release>-k8s-workers-reaper`, every 15 minutes by default) deletes:
 
 - workspace claims whose `cursor.com/last-used-epoch` is older than
-  `hibernation.pvcTtl` (default `72h`) and that no running Pod uses;
+  `hibernation.pvcTtl` (default `7d`) and that no running Pod uses;
 - `Succeeded` / `Failed` worker Pods older than `hibernation.podTtl`
   (default `1h`).
 

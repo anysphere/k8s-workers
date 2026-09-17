@@ -125,7 +125,7 @@ hibernation:
     cloneUrl: ""
   # Delete PVCs not used by a spawn or wake for this long. Format: <n>s, <n>m,
   # <n>h or <n>d. Every worker id that ever ran leaves a PVC behind until then.
-  pvcTtl: 72h
+  pvcTtl: 7d
   # Delete Succeeded/Failed worker Pods older than this. Finished Pods hold a
   # kubernetes.io/pvc-protection finalizer on their PVC, so the reaper removes
   # them before the PVC.

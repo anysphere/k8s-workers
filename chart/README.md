@@ -213,7 +213,7 @@ Use the operator chart when you need those operator behaviors.
 | `hibernation.homeDir` | `/root` | Mount point for the home subPath |
 | `hibernation.seed.fromPath` | `""` | Copy this image path into an empty workspace volume on first use |
 | `hibernation.seed.cloneUrl` | `""` | `git clone` this into an empty workspace volume on first use (needs `git` and credentials) |
-| `hibernation.pvcTtl` | `72h` | Reaper deletes claims unused for this long (`<n>s`/`m`/`h`/`d`) |
+| `hibernation.pvcTtl` | `7d` | Reaper deletes claims unused for this long (`<n>s`/`m`/`h`/`d`) |
 | `hibernation.podTtl` | `1h` | Reaper deletes `Succeeded`/`Failed` worker Pods older than this |
 | `hibernation.reaper.enabled` | `true` | Render the reaper CronJob (only with `hibernation.enabled`) |
 | `hibernation.reaper.schedule` | `*/15 * * * *` | CronJob schedule |
