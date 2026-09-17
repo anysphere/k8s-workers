@@ -31,8 +31,12 @@ with a team **service account API key** (`CURSOR_API_KEY`). With
 PersistentVolumeClaim `ws-<worker-id>` that the hook creates on first use.
 
 The controller image must include the `agent` CLI **and** `kubectl` on `PATH`,
-plus a POSIX shell (`sh`, `sed`, `tr`, `cut`, `date`). Override
-`controller.image` when the worker image has `agent` but not `kubectl`.
+plus a POSIX shell (`sh`, `sed`, `tr`, `cut`, `date`). The CLI from
+[cursor.com/install](https://cursor.com/install) accepts
+`workerReadyTimeoutSeconds` on the pools response. Override
+`controller.image` when the worker image has `agent` but not `kubectl`. A
+base image that has neither can install both in `command` before exec; that
+value is shared with spawned workers.
 
 ## Quick start
 
@@ -152,6 +156,11 @@ files. Disk only: processes do not survive.
 Warm spawns (`--warm-idle`) take the `unset` rows, so a warm worker owns its
 claim before it is ever claimed.
 
+A new volume is `root:root` mode `755`. If the image user is not root, set
+`podSecurityContext.fsGroup` to that user's gid. The reaper Job does not run
+`command`; `hibernation.reaper.image` must contain `kubectl` (it defaults to
+the controller image).
+
 Hibernation also needs a non-zero `workerReadyTimeoutSeconds` on the pool in
 Cursor; `helm install` prints the `POST /v0/private-workers/pools` call in
 its NOTES. Walkthrough, sizing, and caveats: root
@@ -192,11 +201,12 @@ Use the operator chart when you need those operator behaviors.
 | `controller.image.*` | empty | Optional controller image (`agent` + `kubectl`) |
 | `rbac.create` | `true` | Role/RoleBinding for Pod create |
 | `resources` | 250m / 512Mi request, 2Gi memory limit | Spawned **worker** Pod resources |
+| `podSecurityContext` | `{}` | Pod `securityContext`. Set `fsGroup` to the image user's gid when hibernation mounts a volume and that user is not root |
 | `probes.readiness.path` | `/readyz` | Readiness HTTP path on worker Pods |
 | `probes.liveness.path` | `/healthz` | Liveness HTTP path on worker Pods |
 | `hibernation.enabled` | `false` | Opt in to per-worker workspace PVCs and wakes. Off renders nothing extra |
 | `hibernation.wakeWindowSeconds` | `900` | `workerReadyTimeoutSeconds` to set on the pool (1..3600). Printed in NOTES; not applied by the chart |
-| `hibernation.storageClassName` | `""` | PVC storage class; empty uses the cluster default. Prefer `WaitForFirstConsumer` and encryption |
+| `hibernation.storageClassName` | `""` | PVC storage class. Empty uses the default StorageClass; if the cluster has none, the claim stays `Pending` |
 | `hibernation.size` | `20Gi` | PVC size |
 | `hibernation.accessModes` | `[ReadWriteOnce]` | PVC access modes |
 | `hibernation.mountHome` | `false` | Also mount the claim's `home` subPath at `hibernation.homeDir` |
@@ -207,7 +217,7 @@ Use the operator chart when you need those operator behaviors.
 | `hibernation.podTtl` | `1h` | Reaper deletes `Succeeded`/`Failed` worker Pods older than this |
 | `hibernation.reaper.enabled` | `true` | Render the reaper CronJob (only with `hibernation.enabled`) |
 | `hibernation.reaper.schedule` | `*/15 * * * *` | CronJob schedule |
-| `hibernation.reaper.image.*` | empty | Reaper image (`kubectl` + `sh`); empty uses the controller image |
+| `hibernation.reaper.image.*` | empty | Reaper image (`kubectl` + `sh`). Empty uses the controller image. The Job does not run `command` |
 | `hibernation.reaper.resources` | 50m / 64Mi request, 128Mi limit | Reaper Job resources |
 
 ## Health checks

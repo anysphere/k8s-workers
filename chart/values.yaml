@@ -101,9 +101,11 @@ hibernation:
   # Wake (schedule + image pull + volume attach + connect + node scale-up) must
   # finish inside this window and inside idleReleaseTimeout.
   wakeWindowSeconds: 900
-  # Per-worker PVC spec. Empty storageClassName uses the cluster default.
-  # Prefer a class with volumeBindingMode: WaitForFirstConsumer and encryption
-  # at rest: the volume holds a checkout and possibly credential residue.
+  # Per-worker PVC spec. Empty storageClassName uses the default StorageClass.
+  # A cluster with no default leaves the claim Pending ("no storage class is
+  # set"). Prefer a class with volumeBindingMode: WaitForFirstConsumer and
+  # encryption at rest: the volume holds a checkout and possibly credential
+  # residue.
   storageClassName: ""
   size: 20Gi
   accessModes:
@@ -134,6 +136,8 @@ hibernation:
     enabled: true
     schedule: "*/15 * * * *"
     # Image with kubectl and a POSIX shell. Empty uses the controller image.
+    # The Job runs reaper.sh, not `command`, so a start script that installs
+    # kubectl for the controller does not apply here.
     image:
       repository: ""
       tag: ""
@@ -184,6 +188,9 @@ extraEnv: []
 extraVolumeMounts: []
 extraVolumes: []
 
+# Pod securityContext for spawned workers. A new hibernation volume is
+# root:root mode 755. Set fsGroup to the image user's gid when that user is
+# not root, so the kubelet makes the mount group-writable before start.
 podSecurityContext: {}
 securityContext: {}
 

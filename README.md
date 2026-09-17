@@ -129,7 +129,12 @@ controller Deployment so a rollout keeps a single controller.
 - A [service account API key](https://cursor.com/docs/account/enterprise/service-accounts)
   for pool workers (personal API keys are rejected)
 - A worker container image that includes:
-  - the `agent` / `cursor-agent` CLI
+  - the `agent` / `cursor-agent` CLI from
+    [cursor.com/install](https://cursor.com/install). That build accepts
+    `workerReadyTimeoutSeconds` on `GET /v0/private-workers/pools`. If the
+    image does not bake the binary, download it in the container `command`
+    before exec. The chart uses the same `command` for the controller and
+    for spawned workers.
   - `git` on `PATH` (required for git remotes / `--clone-git-repos`)
   - a workspace directory at `workerDir` (default `/workspace`)
   - `/bin/sh` if you turn on [hibernation](#hibernation-opt-in) (the
@@ -137,7 +142,8 @@ controller Deployment so a rollout keeps a single controller.
 - The controller container also needs `kubectl` on `PATH` and a POSIX shell
   (`sh`, `sed`, `tr`, `cut`, `date`; any Debian, Ubuntu, Alpine or busybox
   base has them). Override `controller.image` if your worker image has
-  `agent` but not `kubectl`.
+  `agent` but not `kubectl`. A base image that has neither can install both
+  in that same `command`.
 
 ## Install
 
@@ -296,7 +302,9 @@ Cursor-managed hibernation snapshots memory; this does not.
 
 2. Install or upgrade with the feature on. `hibernation.storageClassName`
    should be a class with `volumeBindingMode: WaitForFirstConsumer` and
-   encryption at rest; empty uses the cluster default.
+   encryption at rest. Empty uses the cluster's default StorageClass, and
+   only when one is marked default. A cluster that has classes but no default
+   leaves the claim `Pending` with `no storage class is set`.
 
    ```bash
    helm upgrade --install my-workers ./chart \
@@ -383,6 +391,12 @@ so the reaper deletes a worker's finished Pods before its claim. Run it by
 hand with `kubectl -n cursord create job --from=cronjob/<release>-k8s-workers-reaper reap-now`.
 Disable it with `hibernation.reaper.enabled=false` and delete claims yourself.
 
+The reaper container runs `/hooks/reaper.sh`. It does not use `command`, so a
+start script that installs `kubectl` for the controller does not put it on
+the reaper's `PATH`. `hibernation.reaper.image` defaults to the controller
+image; that image must already contain `kubectl`, or set
+`hibernation.reaper.image` to one that does.
+
 ### Caveats
 
 - **Zone pinning.** A `ReadWriteOnce` block volume is bound to the zone (or
@@ -399,6 +413,12 @@ Disable it with `hibernation.reaper.enabled=false` and delete claims yourself.
   storage class. Claims are keyed strictly by worker id, so a volume never
   mounts for a different agent. `hibernation.mountHome` is off by default for
   this reason.
+- **Volume ownership.** A newly provisioned volume is `root:root` and mode
+  `755`. The agent runs as the image user. If that user is not root, set
+  `podSecurityContext.fsGroup` to its gid so the kubelet makes the mount
+  group-writable before the container starts. The container user cannot
+  `chown` the mount from `command`. Do not set a default `fsGroup`; images
+  that run as root do not need one.
 - **Quotas.** Every worker id that ever ran leaves a claim until the TTL. A
   team can run up to 1000 workers; size the storage quota, and note that EBS
   caps attachments per node near 25.
@@ -481,9 +501,14 @@ Only worker Pods serve these endpoints.
 | Pods spawn then exit immediately | Image has `agent` + `git`; `workerDir` exists; check worker logs |
 | Agent cannot find the pool under a repo | You started any-repo (no `repo=` labels). Pick **Any repo**, or bake a git remote for repo-bound |
 | Warm idle overshoots | Only one controller per pool; chart uses Recreate — avoid a second Helm release on the same pool with `warmIdle>0` |
+| Controller CrashLoop, `exec: "agent": executable file not found` | The image does not contain the CLI. Download the [cursor.com/install](https://cursor.com/install) build in `command` before exec. The same `command` runs in worker Pods. |
 | Controller CrashLoop | Controller image missing `kubectl` or `agent`; RBAC Role cannot create Pods; Secret key name ≠ `auth.secretKey` |
 | Follow-up lands on a fresh workspace with hibernation on | Pool window still `0` (run the NOTES API call with a team-scoped key); `idleReleaseTimeout` or the window shorter than the wake; claim reaped (`pvcTtl`) or deleted; hook logged `exit 3` because `ws-<worker-id>` was gone |
+| `Permission denied` writing under `workerDir` | The new volume is `root:root` `755`. Set `podSecurityContext.fsGroup` to the image user's gid (often `1000`). See [Caveats](#caveats). |
+| `ws-*` stays `Pending`, storage class blank, `no storage class is set` | The cluster has no default StorageClass. Set `hibernation.storageClassName`. |
+| `ws-*` stays `Pending`, `Waiting for a volume to be created` by `ebs.csi.aws.com` | The class (often in-tree `gp2`, provisioner `kubernetes.io/aws-ebs`) is translated to the EBS CSI driver, and that driver is not installed. Install the `aws-ebs-csi-driver` add-on, or name a class whose provisioner is running. |
 | Wake Pod stays `Pending`, `volume node affinity conflict` | The claim's zone/node has no capacity. Per-zone node groups, regional disk, or `ReadWriteMany` storage. See [Caveats](#caveats) |
+| Reaper Job `Error`, `kubectl: not found` | The reaper does not run `command`. `hibernation.reaper.image` (the controller image when empty) must have `kubectl` on `PATH`, or set `hibernation.reaper.enabled=false`. |
 | `ws-*` claim stuck `Terminating` | A `Succeeded`/`Failed` Pod still references it (`kubernetes.io/pvc-protection`). Delete those Pods; the reaper does this before deleting a claim |
 | Worker Pod fails at start with hibernation on | Worker image lacks `/bin/sh`; `seed.fromPath` missing in the image; `seed.cloneUrl` needs `git` and credentials |
 
