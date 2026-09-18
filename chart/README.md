@@ -18,17 +18,25 @@ Keep the operator installed if you still need that path.
 | Resource | When | Description |
 |----------|------|-------------|
 | Deployment (1 replica) | `controller.enabled` | `agent worker controller --spawn …` (the controller process) |
-| ConfigMap | `controller.enabled` | Spawn hook that `kubectl create`s one worker Pod |
-| Role / RoleBinding | `controller.enabled` and `rbac.create` | Namespace permission to create/get/list Pods |
+| ConfigMap | `controller.enabled` | Spawn hook plus the worker Pod manifest it `kubectl create`s (and, with hibernation, the PVC manifest and entrypoint) |
+| Role / RoleBinding | `controller.enabled` and `rbac.create` | Namespace permission to create/get/list Pods (plus create/get/list/patch PVCs with hibernation) |
 | ServiceAccount | `serviceAccount.create` | Controller SA; token automount on (required for kubectl) |
 | Secret | `auth.apiKey` set and `auth.existingSecret` empty | Holds `CURSOR_API_KEY` |
+| CronJob + ConfigMap + ServiceAccount + Role + RoleBinding (`*-reaper`) | `hibernation.enabled` and `hibernation.reaper.enabled` | Deletes stale workspace PVCs and finished worker Pods |
 
 Worker **instances** are outside the Helm release. Each `--spawn` creates a Pod
-with `restartPolicy: Never`. Workers authenticate with a team **service account
-API key** (`CURSOR_API_KEY`).
+named `<worker-id>-<suffix>` with `restartPolicy: Never`. Workers authenticate
+with a team **service account API key** (`CURSOR_API_KEY`). With
+[hibernation](#hibernation-opt-in) on, each worker id also owns a
+PersistentVolumeClaim `ws-<worker-id>` that the hook creates on first use.
 
-The controller image must include the `agent` CLI **and** `kubectl` on `PATH`.
-Override `controller.image` when the worker image has `agent` but not `kubectl`.
+The controller image must include the `agent` CLI **and** `kubectl` on `PATH`,
+plus a POSIX shell (`sh`, `sed`, `tr`, `cut`, `date`). The CLI from
+[cursor.com/install](https://cursor.com/install) accepts
+`workerReadyTimeoutSeconds` on the pools response. Override
+`controller.image` when the worker image has `agent` but not `kubectl`. A
+base image that has neither can install both in `command` before exec; that
+value is shared with spawned workers.
 
 ## Quick start
 
@@ -84,14 +92,21 @@ runs `kubectl create -f -` with a Pod spec:
 
 1. `restartPolicy: Never` — when `--idle-release-timeout` exits 0, the Pod is
    **Succeeded**.
-2. The worker registers with `CURSOR_AGENT_WORKER_ID` from the hook env (the
-   id the controller claimed or generated).
+2. The Pod is created with `generateName: <worker-id>-`, so a later Pod for
+   the same worker id (a hibernation wake) never collides with the finished
+   one. The worker receives `CURSOR_AGENT_WORKER_ID` exactly as the controller
+   claimed or generated it; `CURSOR_WORKER_NAME` is the Pod name.
 3. `CURSOR_API_KEY` is mounted from the same Secret; the worker Pod uses that
    key rather than the controller ServiceAccount token.
 4. `agent worker start` mints a session at the CLI auth default
    (`https://api2.cursor.sh`). The controller default (`https://api.cursor.com`)
    is for `/v0/private-workers`. Set `controller.endpoint` to override the
    controller process.
+
+The hook substitutes exactly three tokens (`${WORKER_SLUG}`, `${WORKER_ID}`,
+`${POOL}`) into the manifests with `sed`, after validating each to a safe
+character set. Any other `$` in your `command` or `extraArgs` is passed
+through untouched.
 
 ### Claim-then-spawn (`controller.warmIdle=0`, default)
 
@@ -111,12 +126,45 @@ Run one warm controller per pool. Two concurrent warm controllers can
 transiently over-spawn. This chart uses `strategy: Recreate` on the controller
 Deployment so a rollout keeps a single controller.
 
-Succeeded/Failed worker Pods stay until you delete them:
+Succeeded/Failed worker Pods stay until you delete them (or until the
+hibernation reaper does):
 
 ```bash
 kubectl -n cursord delete pod -l app.kubernetes.io/component=worker \
   --field-selector=status.phase=Succeeded
 ```
+
+## Hibernation (opt-in)
+
+Off by default (`hibernation.enabled=false`), and off means the chart above
+with no additions: no PersistentVolumeClaims, no CronJob, no PVC RBAC.
+
+On, the spawn hook gives each worker id a PVC `ws-<worker-id>` mounted at
+`workerDir`. The Pod still exits after `idleReleaseTimeout`, the claim stays,
+and when a follow-up arrives inside the pool's reconnect window the
+controller runs the hook again with `CURSOR_WAKE=1` and the same worker id.
+The hook mounts the same claim into a new Pod and the agent resumes on its
+files. Disk only: processes do not survive.
+
+| `CURSOR_WAKE` | `hibernation.enabled` | Hook behavior |
+| --- | --- | --- |
+| unset | `false` | Fresh Pod, no volume. |
+| unset | `true` | Create `ws-<worker-id>` if missing, stamp `cursor.com/last-used-*`, create the Pod with it mounted. |
+| `1` | `false` | Fresh Pod with the claimed worker id and no volume. |
+| `1` | `true` | Require `ws-<worker-id>`; mount it and stamp. If it is missing or terminating, exit 3 without spawning so the window lapses into a fresh claim. |
+
+Warm spawns (`--warm-idle`) take the `unset` rows, so a warm worker owns its
+claim before it is ever claimed.
+
+A new volume is `root:root` mode `755`. If the image user is not root, set
+`podSecurityContext.fsGroup` to that user's gid. The reaper Job does not run
+`command`; `hibernation.reaper.image` must contain `kubectl` (it defaults to
+the controller image).
+
+Hibernation also needs a non-zero `workerReadyTimeoutSeconds` on the pool in
+Cursor; `helm install` prints the `POST /v0/private-workers/pools` call in
+its NOTES. Walkthrough, sizing, and caveats: root
+[README → Hibernation](../README.md#hibernation-opt-in).
 
 ## Compared to the operator
 
@@ -153,8 +201,24 @@ Use the operator chart when you need those operator behaviors.
 | `controller.image.*` | empty | Optional controller image (`agent` + `kubectl`) |
 | `rbac.create` | `true` | Role/RoleBinding for Pod create |
 | `resources` | 250m / 512Mi request, 2Gi memory limit | Spawned **worker** Pod resources |
+| `podSecurityContext` | `{}` | Pod `securityContext`. Set `fsGroup` to the image user's gid when hibernation mounts a volume and that user is not root |
 | `probes.readiness.path` | `/readyz` | Readiness HTTP path on worker Pods |
 | `probes.liveness.path` | `/healthz` | Liveness HTTP path on worker Pods |
+| `hibernation.enabled` | `false` | Opt in to per-worker workspace PVCs and wakes. Off renders nothing extra |
+| `hibernation.wakeWindowSeconds` | `900` | `workerReadyTimeoutSeconds` to set on the pool (1..3600). Printed in NOTES; not applied by the chart |
+| `hibernation.storageClassName` | `""` | PVC storage class. Empty uses the default StorageClass; if the cluster has none, the claim stays `Pending` |
+| `hibernation.size` | `20Gi` | PVC size |
+| `hibernation.accessModes` | `[ReadWriteOnce]` | PVC access modes |
+| `hibernation.mountHome` | `false` | Also mount the claim's `home` subPath at `hibernation.homeDir` |
+| `hibernation.homeDir` | `/root` | Mount point for the home subPath |
+| `hibernation.seed.fromPath` | `""` | Copy this image path into an empty workspace volume on first use |
+| `hibernation.seed.cloneUrl` | `""` | `git clone` this into an empty workspace volume on first use (needs `git` and credentials) |
+| `hibernation.pvcTtl` | `7d` | Reaper deletes claims unused for this long (`<n>s`/`m`/`h`/`d`) |
+| `hibernation.podTtl` | `1h` | Reaper deletes `Succeeded`/`Failed` worker Pods older than this |
+| `hibernation.reaper.enabled` | `true` | Render the reaper CronJob (only with `hibernation.enabled`) |
+| `hibernation.reaper.schedule` | `*/15 * * * *` | CronJob schedule |
+| `hibernation.reaper.image.*` | empty | Reaper image (`kubectl` + `sh`). Empty uses the controller image. The Job does not run `command` |
+| `hibernation.reaper.resources` | 50m / 64Mi request, 128Mi limit | Reaper Job resources |
 
 ## Health checks
 

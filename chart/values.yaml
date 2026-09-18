@@ -79,7 +79,59 @@ controller:
     limits:
       memory: 512Mi
 
-# Namespace Role granting the controller ServiceAccount create/get/list on Pods.
+# Per-worker workspace volume across idle exits. Off by default. Also needs a
+# non-zero workerReadyTimeoutSeconds on the pool; NOTES.txt prints the call.
+hibernation:
+  enabled: false
+  # Reconnect window to set on the pool (workerReadyTimeoutSeconds, 1..3600).
+  # Printed in NOTES.txt; the chart cannot set it on the pool itself.
+  wakeWindowSeconds: 900
+  # Empty uses the default StorageClass. No default leaves the claim Pending.
+  storageClassName: ""
+  size: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  # Also persist a home directory (subPath home of the same PVC) at homeDir.
+  # Off by default: it keeps credential residue between episodes and shadows
+  # dotfiles baked into the image at homeDir.
+  mountHome: false
+  homeDir: /root
+  # How an empty workspace volume is populated on first use. The PVC mount
+  # shadows whatever the image baked into workerDir, so a repo-bound image
+  # should bake its clone elsewhere and set seed.fromPath, or set
+  # seed.cloneUrl (git on PATH, credentials via extraEnv/volumes). Leave both
+  # empty for any-repo pools; the agent clones into the empty workspace.
+  seed:
+    fromPath: ""
+    cloneUrl: ""
+  # Delete PVCs not used by a spawn or wake for this long. Format: <n>s, <n>m,
+  # <n>h or <n>d. Every worker id that ever ran leaves a PVC behind until then.
+  pvcTtl: 7d
+  # Delete Succeeded/Failed worker Pods older than this. Finished Pods hold a
+  # kubernetes.io/pvc-protection finalizer on their PVC, so the reaper removes
+  # them before the PVC.
+  podTtl: 1h
+  reaper:
+    # CronJob that applies pvcTtl and podTtl. Rendered only with
+    # hibernation.enabled. Cursor never deletes Kubernetes objects.
+    enabled: true
+    schedule: "*/15 * * * *"
+    # Image with kubectl and a POSIX shell. Empty uses the controller image.
+    # Does not run `command`.
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+      pullPolicy: ""
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+
+# Namespace Role granting the controller ServiceAccount create/get/list on Pods
+# (plus create/get/list/patch on PersistentVolumeClaims with hibernation).
 rbac:
   create: true
 
@@ -116,6 +168,9 @@ extraEnv: []
 extraVolumeMounts: []
 extraVolumes: []
 
+# Pod securityContext for spawned workers. A new hibernation volume is
+# root:root mode 755. Set fsGroup to the image user's gid when that user is
+# not root, so the kubelet makes the mount group-writable before start.
 podSecurityContext: {}
 securityContext: {}
 

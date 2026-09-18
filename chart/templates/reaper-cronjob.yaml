@@ -1,0 +1,182 @@
+{{- $_ := include "cursor-worker-pool.validate" . }}
+{{- if and .Values.hibernation.enabled .Values.hibernation.reaper.enabled }}
+{{- $name := include "cursor-worker-pool.reaperName" . }}
+{{- $selector := printf "app.kubernetes.io/name=%s,app.kubernetes.io/instance=%s" (include "cursor-worker-pool.name" .) .Release.Name }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cursor-worker-pool.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+data:
+  reaper.sh: |
+    #!/bin/sh
+    # Cursor never deletes Kubernetes objects, so this job applies the TTLs:
+    #   1. worker Pods in Succeeded/Failed older than POD_TTL_SECONDS
+    #   2. workspace PVCs whose last-used-epoch is older than PVC_TTL_SECONDS
+    #      and that no live Pod references. Finished Pods for that worker are
+    #      deleted first: they hold the kubernetes.io/pvc-protection finalizer.
+    # Only objects carrying this release's labels are touched.
+    set -eu
+    now="$(date +%s)"
+
+    to_epoch() {
+      # RFC3339 -> epoch. GNU date, then busybox date. Empty on failure, in
+      # which case the caller skips the object rather than guessing.
+      date -u -d "$1" +%s 2>/dev/null \
+        || date -u -D '%Y-%m-%dT%H:%M:%SZ' -d "$1" +%s 2>/dev/null \
+        || true
+    }
+
+    pods="$(kubectl -n "${NAMESPACE}" get pods -l "${SELECTOR},app.kubernetes.io/component=worker" \
+      --no-headers -o custom-columns='N:.metadata.name,P:.status.phase,C:.metadata.creationTimestamp,F:.status.containerStatuses[0].state.terminated.finishedAt')" \
+      || { echo "reaper: listing worker pods failed" >&2; exit 1; }
+    printf '%s\n' "${pods}" | while read -r name phase created finished; do
+        [ -n "${name}" ] || continue
+        case "${phase}" in Succeeded|Failed) ;; *) continue ;; esac
+        ts="${finished}"
+        [ "${ts}" != "<none>" ] || ts="${created}"
+        epoch="$(to_epoch "${ts}")"
+        [ -n "${epoch}" ] || { echo "reaper: cannot parse time ${ts} for pod ${name}; skipping" >&2; continue; }
+        if [ $((now - epoch)) -ge "${POD_TTL_SECONDS}" ]; then
+          echo "reaper: deleting ${phase} pod ${name} (finished $((now - epoch))s ago)"
+          kubectl -n "${NAMESPACE}" delete pod "${name}" --ignore-not-found --wait=false >/dev/null || true
+        fi
+      done
+
+    pvcs="$(kubectl -n "${NAMESPACE}" get pvc -l "${SELECTOR},app.kubernetes.io/component=workspace" \
+      --no-headers -o custom-columns='N:.metadata.name,W:.metadata.labels.cursor\.com/worker-id,L:.metadata.annotations.cursor\.com/last-used-epoch,D:.metadata.deletionTimestamp')" \
+      || { echo "reaper: listing workspace PVCs failed" >&2; exit 1; }
+    printf '%s\n' "${pvcs}" | while read -r name slug last deleting; do
+        [ -n "${name}" ] || continue
+        [ "${deleting}" = "<none>" ] || continue
+        if [ "${last}" = "<none>" ] || [ "${slug}" = "<none>" ]; then
+          echo "reaper: pvc ${name} has no last-used-epoch/worker-id; skipping" >&2
+          continue
+        fi
+        age=$((now - last))
+        [ "${age}" -ge "${PVC_TTL_SECONDS}" ] || continue
+        live="$(kubectl -n "${NAMESPACE}" get pods -l "cursor.com/worker-id=${slug}" \
+          --field-selector=status.phase!=Succeeded,status.phase!=Failed -o name 2>/dev/null || true)"
+        if [ -n "${live}" ]; then
+          echo "reaper: pvc ${name} is ${age}s stale but still in use by ${live}; skipping"
+          continue
+        fi
+        echo "reaper: deleting pvc ${name} (unused for ${age}s) and its finished pods"
+        kubectl -n "${NAMESPACE}" delete pods -l "cursor.com/worker-id=${slug}" --ignore-not-found --wait=false >/dev/null || true
+        kubectl -n "${NAMESPACE}" delete pvc "${name}" --ignore-not-found --wait=false >/dev/null || true
+      done
+
+    echo "reaper: done"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cursor-worker-pool.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cursor-worker-pool.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cursor-worker-pool.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cursor-worker-pool.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reaper
+spec:
+  schedule: {{ .Values.hibernation.reaper.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            {{- include "cursor-worker-pool.labels" . | nindent 12 }}
+            app.kubernetes.io/component: reaper
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ $name }}
+          automountServiceAccountToken: true
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.podSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: reaper
+              image: {{ include "cursor-worker-pool.reaperImage" . | quote }}
+              imagePullPolicy: {{ include "cursor-worker-pool.reaperPullPolicy" . }}
+              command:
+                - /bin/sh
+                - /hooks/reaper.sh
+              env:
+                - name: NAMESPACE
+                  value: {{ .Release.Namespace | quote }}
+                - name: SELECTOR
+                  value: {{ $selector | quote }}
+                - name: PVC_TTL_SECONDS
+                  value: {{ include "cursor-worker-pool.durationSeconds" .Values.hibernation.pvcTtl | quote }}
+                - name: POD_TTL_SECONDS
+                  value: {{ include "cursor-worker-pool.durationSeconds" .Values.hibernation.podTtl | quote }}
+              resources:
+                {{- toYaml .Values.hibernation.reaper.resources | nindent 16 }}
+              {{- with .Values.securityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                - name: reaper
+                  mountPath: /hooks
+                  readOnly: true
+          volumes:
+            - name: reaper
+              configMap:
+                name: {{ $name }}
+                defaultMode: 0755
+{{- end }}
