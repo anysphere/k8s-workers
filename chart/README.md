@@ -6,12 +6,10 @@ see the root [README.md](../README.md).
 Deploys an in-cluster `agent worker controller` that kubectl-creates Cursor
 self-hosted **pool** workers as vanilla Kubernetes **Pods**.
 
-This chart is **additive** to the published operator path:
-
-1. Install [`worker-set-controller-chart`](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes).
-2. Apply `WorkerDeployment` resources.
-
-Keep the operator installed if you still need that path.
+This chart replaces the deprecated `worker-set-controller` operator. It installs
+no CRD and no `WorkerDeployment`, so it can share a cluster with an existing
+operator install. See
+[Differences from the deprecated operator](#differences-from-the-deprecated-operator).
 
 ## What this installs
 
@@ -41,9 +39,12 @@ value is shared with spawned workers.
 ## Quick start
 
 Your worker image must include the `agent` CLI, `git` on `PATH`, and a
-workspace at `workerDir` (see the
-[Kubernetes self-hosted guide](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes)).
+workspace at `workerDir` (see [Prerequisites](../README.md#prerequisites)).
 The controller container additionally needs `kubectl`.
+
+The chart is published to `oci://ghcr.io/anysphere/charts/k8s-workers`. Replace
+`0.2.0` below with the version you want from the
+[releases page](https://github.com/anysphere/k8s-workers/releases).
 
 ### Existing Secret
 
@@ -52,7 +53,8 @@ kubectl create secret generic cursor-workers-api-key \
   --from-literal=api-key='YOUR_SERVICE_ACCOUNT_API_KEY' \
   -n cursord
 
-helm upgrade --install my-workers ./chart \
+helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+  --version 0.2.0 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -64,7 +66,8 @@ helm upgrade --install my-workers ./chart \
 ### Chart-managed Secret
 
 ```bash
-helm upgrade --install my-workers ./chart \
+helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+  --version 0.2.0 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -77,7 +80,8 @@ Prefer `--set` or a gitignored values overlay over committing `auth.apiKey`.
 Render without installing:
 
 ```bash
-helm template my-workers ./chart \
+helm template my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+  --version 0.2.0 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=sample \
   --set auth.existingSecret=cursor-workers-api-key
@@ -166,17 +170,16 @@ Cursor; `helm install` prints the `POST /v0/private-workers/pools` call in
 its NOTES. Walkthrough, sizing, and caveats: root
 [README → Hibernation](../README.md#hibernation-opt-in).
 
-## Compared to the operator
+## Differences from the deprecated operator
 
 | Operator (`WorkerDeployment`) | This chart |
 |-------------------------------|----------|
 | `readyReplicas` = idle workers; claimed `/readyz` 503 triggers replacements | `--warm-idle` (optional) or claim-then-spawn; each worker is a Pod created by `--spawn` |
 | Busy-safe rolling updates (drain idle, wait for busy) | Controller uses Recreate; worker Pods are one-shot |
-| Operator token exchange + `--auth-token-file` rotation | Long-lived `CURSOR_API_KEY` from a Secret |
+| Operator token exchange + `--auth-token-file` rotation | Long-lived `CURSOR_API_KEY` from a Secret, set in each worker Pod's environment |
 | `WorkerDeployment` + `worker-set-controller` | Vanilla Pods via `--spawn` |
 | Optional demand autoscaling / scale-to-zero | Claim-then-spawn if `warmIdle=0`; otherwise a fixed idle target via `--warm-idle` |
-
-Use the operator chart when you need those operator behaviors.
+| Two controller replicas with leader election | One controller replica; nothing claims or spawns while it restarts |
 
 ## Values
 

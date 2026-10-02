@@ -5,10 +5,12 @@ your cluster. Cursor hosts the agent loop. An in-cluster
 `agent worker controller` kubectl-creates one worker Pod per spawn; each
 worker runs tool calls inside your cluster network.
 
-For the published `worker-set-controller` / `WorkerDeployment` path, see
-[Deploying with Kubernetes](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes).
-Use this sample for controller `--spawn` Pods (claim-then-spawn or
-`--warm-idle`).
+This chart replaces the deprecated `worker-set-controller` operator and its
+`WorkerDeployment` CRD. Clusters that already run the operator keep working,
+and the [operator reference](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes)
+stays available.
+[Differences from the deprecated operator](#differences-from-the-deprecated-operator)
+lists what changes when you move over.
 
 ## How it works
 
@@ -32,7 +34,7 @@ Use this sample for controller `--spawn` Pods (claim-then-spawn or
 | One-shot Pods | `restartPolicy: Never` — idle exit completes the Pod; next spawn creates a new one |
 | Claim or warm | `controller.warmIdle=0` claim-then-spawn, or `>0` for `--warm-idle N` |
 | Service account key | Long-lived `CURSOR_API_KEY` from a Secret |
-| Additive | Safe to run alongside `worker-set-controller` / `WorkerDeployment` |
+| No CRD | Installs no CRD or `WorkerDeployment`, so it can share a cluster with an existing operator install |
 | Hibernation | **Off by default.** Opt in with `hibernation.enabled=true` plus a pool reconnect window to keep a per-worker workspace volume across idle exits. See [Hibernation](#hibernation-opt-in) |
 
 ## Pool and repo modes
@@ -189,14 +191,11 @@ controller Deployment so a rollout keeps a single controller.
 
 ## Install
 
-1. Clone this repository.
+The chart is published to `oci://ghcr.io/anysphere/charts/k8s-workers`. These
+steps pin `0.2.0`; replace it with the newest version on the
+[releases page](https://github.com/anysphere/k8s-workers/releases).
 
-   ```bash
-   git clone https://github.com/anysphere/k8s-workers.git
-   cd k8s-workers
-   ```
-
-2. Create a namespace and store the service account API key.
+1. Create a namespace and store the service account API key.
 
    ```bash
    kubectl create namespace cursord
@@ -206,10 +205,11 @@ controller Deployment so a rollout keeps a single controller.
      -n cursord
    ```
 
-3. Install the chart (claim-then-spawn, named any-repo pool).
+2. Install the chart (claim-then-spawn, named any-repo pool).
 
    ```bash
-   helm upgrade --install my-workers ./chart \
+   helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+     --version 0.2.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -221,7 +221,8 @@ controller Deployment so a rollout keeps a single controller.
    For a warm pool of three idle workers instead:
 
    ```bash
-   helm upgrade --install my-workers ./chart \
+   helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+     --version 0.2.0 \
      --namespace cursord \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -234,7 +235,8 @@ controller Deployment so a rollout keeps a single controller.
    committing the key):
 
    ```bash
-   helm upgrade --install my-workers ./chart \
+   helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+     --version 0.2.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -242,20 +244,25 @@ controller Deployment so a rollout keeps a single controller.
      --set auth.apiKey='YOUR_SERVICE_ACCOUNT_API_KEY'
    ```
 
-4. Confirm the controller is up.
+3. Confirm the controller is up.
 
    ```bash
    kubectl -n cursord get deploy,pods -l app.kubernetes.io/instance=my-workers
    kubectl -n cursord logs -l app.kubernetes.io/component=controller -f
    ```
 
-5. Start an agent from [cursor.com/agents](https://cursor.com/agents)
+4. Start an agent from [cursor.com/agents](https://cursor.com/agents)
    (see [Run a cloud agent](#run-a-cloud-agent) below).
+
+To change the spawn hook or templates, clone the repository at the release tag
+(`git clone --branch v0.2.0 https://github.com/anysphere/k8s-workers.git`) and
+install `./chart` in place of the OCI reference.
 
 Render without installing:
 
 ```bash
-helm template my-workers ./chart \
+helm template my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+  --version 0.2.0 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key
@@ -268,6 +275,31 @@ Local lint / kubeconform (optional):
 ```
 
 Full values reference: [chart/README.md](chart/README.md).
+
+## Versioning
+
+Each release has one version (`0.2.0`, `0.2.1`, and so on), the `version` in
+[`chart/Chart.yaml`](chart/Chart.yaml), published from the same commit as:
+
+- the chart in `oci://ghcr.io/anysphere/charts/k8s-workers`, which is what
+  `helm install --version` pulls;
+- a git tag, `v0.2.0`;
+- a GitHub release on the
+  [releases page](https://github.com/anysphere/k8s-workers/releases) with that
+  version's [`CHANGELOG.md`](CHANGELOG.md) entry and the packaged chart.
+
+Pass `--version` to pin a release; without it Helm installs the newest.
+
+While the chart is 0.x, a minor release (0.2.x to 0.3.0) can rename values,
+change defaults, or change the resources it renders, so read its changelog
+entry before you upgrade. A patch release (0.2.0 to 0.2.1) needs no action from
+you.
+
+Argo CD and Flux install Helm charts from OCI registries: point them at
+`oci://ghcr.io/anysphere/charts`, chart `k8s-workers`, and a pinned version. To
+mirror a release into your own registry, run
+`helm pull oci://ghcr.io/anysphere/charts/k8s-workers --version <version>` and
+push the resulting `.tgz`.
 
 ## Run a cloud agent
 
@@ -349,7 +381,8 @@ Cursor-managed hibernation snapshots memory; this does not.
    leaves the claim `Pending` with `no storage class is set`.
 
    ```bash
-   helm upgrade --install my-workers ./chart \
+   helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+     --version 0.2.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -556,14 +589,15 @@ Only worker Pods serve these endpoints.
 | `ws-*` claim stuck `Terminating` | A `Succeeded`/`Failed` Pod still references it (`kubernetes.io/pvc-protection`). Delete those Pods; the reaper does this before deleting a claim |
 | Worker Pod fails at start with hibernation on | Worker image lacks `/bin/sh`; `seed.fromPath` missing in the image; `seed.cloneUrl` needs `git` and credentials |
 
-## Compared to the operator
+## Differences from the deprecated operator
 
 | Operator (`WorkerDeployment`) | This chart |
 | --- | --- |
 | `readyReplicas` = idle workers; busy-safe rolling updates | `--warm-idle` or claim-then-spawn; one-shot Pods |
-| Operator token exchange + `--auth-token-file` | Long-lived `CURSOR_API_KEY` Secret |
+| Operator exchanges the API key for short-lived tokens that workers read with `--auth-token-file` | Each worker Pod gets the long-lived service account key as `CURSOR_API_KEY`, in the environment where the agent runs commands |
 | `WorkerDeployment` + `worker-set-controller` | Vanilla Pods via `--spawn` |
 | Optional demand autoscaling / scale-to-zero | Claim-then-spawn (`warmIdle=0`) or fixed idle via `--warm-idle` |
+| Two controller replicas with leader election | One controller replica; nothing claims or spawns while it restarts, and connected workers keep running |
 
 ## Related resources
 
@@ -571,7 +605,7 @@ Only worker Pods serve these endpoints.
   ([Any repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#any-repo-pools),
   [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#pool-names),
   [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#register-multiple-repo-roots))
-- [Deploying with Kubernetes](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes) (operator path)
+- [Deploying with Kubernetes](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes) (deprecated operator reference)
 - [Service accounts](https://cursor.com/docs/account/enterprise/service-accounts)
 - This repo: [`chart/`](chart/), [`scripts/helm-validate.sh`](scripts/helm-validate.sh)
 
