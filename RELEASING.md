@@ -7,7 +7,8 @@ The cloud-harness and agent-runtime teams own releases and `v*` tags.
 Any change under `chart/` other than `chart/README.md` ships as a new version.
 In the same PR, raise `version` in `chart/Chart.yaml`, set `appVersion` to the
 same value, and add a `## <version>` entry at the top of `CHANGELOG.md` that
-says what changed and what users must do, if anything.
+says what changed and what users must do, if anything. CI runs
+`scripts/check-chart-version.sh` and fails the PR when any of these is missing.
 
 Pick the number by what an existing install needs:
 
