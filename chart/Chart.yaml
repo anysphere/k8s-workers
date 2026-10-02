@@ -5,3 +5,6 @@ appVersion: "0.2.0"
 type: application
 description: Runs Cursor self-hosted pool workers as one-shot Pods spawned by agent worker controller.
   Replaces the deprecated worker-set-controller-chart / WorkerDeployment operator.
+home: https://github.com/anysphere/k8s-workers
+sources:
+  - https://github.com/anysphere/k8s-workers

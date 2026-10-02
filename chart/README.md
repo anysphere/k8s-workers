@@ -42,6 +42,10 @@ Your worker image must include the `agent` CLI, `git` on `PATH`, and a
 workspace at `workerDir` (see [Prerequisites](../README.md#prerequisites)).
 The controller container additionally needs `kubectl`.
 
+The chart is published to `oci://ghcr.io/anysphere/charts/k8s-workers`. Replace
+`0.2.0` below with the version you want from the
+[releases page](https://github.com/anysphere/k8s-workers/releases).
+
 ### Existing Secret
 
 ```bash
@@ -49,7 +53,8 @@ kubectl create secret generic cursor-workers-api-key \
   --from-literal=api-key='YOUR_SERVICE_ACCOUNT_API_KEY' \
   -n cursord
 
-helm upgrade --install my-workers ./chart \
+helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+  --version 0.2.0 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -61,7 +66,8 @@ helm upgrade --install my-workers ./chart \
 ### Chart-managed Secret
 
 ```bash
-helm upgrade --install my-workers ./chart \
+helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+  --version 0.2.0 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -74,7 +80,8 @@ Prefer `--set` or a gitignored values overlay over committing `auth.apiKey`.
 Render without installing:
 
 ```bash
-helm template my-workers ./chart \
+helm template my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+  --version 0.2.0 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=sample \
   --set auth.existingSecret=cursor-workers-api-key

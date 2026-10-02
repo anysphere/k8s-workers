@@ -32,12 +32,18 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v4.1.0
+      - name: Log in to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: helm registry login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<<"${GH_TOKEN}"
       - name: Release the chart version if it is not tagged yet
         env:
           GH_TOKEN: ${{ github.token }}
+          CHART_REGISTRY: oci://ghcr.io/anysphere/charts
         run: ./scripts/release-chart.sh

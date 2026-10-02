@@ -191,15 +191,11 @@ controller Deployment so a rollout keeps a single controller.
 
 ## Install
 
-1. Clone this repository at a release tag. Replace `v0.2.0` with the newest
-   tag on the [tags page](https://github.com/anysphere/k8s-workers/tags).
+The chart is published to `oci://ghcr.io/anysphere/charts/k8s-workers`. These
+steps pin `0.2.0`; replace it with the newest version on the
+[releases page](https://github.com/anysphere/k8s-workers/releases).
 
-   ```bash
-   git clone --branch v0.2.0 https://github.com/anysphere/k8s-workers.git
-   cd k8s-workers
-   ```
-
-2. Create a namespace and store the service account API key.
+1. Create a namespace and store the service account API key.
 
    ```bash
    kubectl create namespace cursord
@@ -209,10 +205,11 @@ controller Deployment so a rollout keeps a single controller.
      -n cursord
    ```
 
-3. Install the chart (claim-then-spawn, named any-repo pool).
+2. Install the chart (claim-then-spawn, named any-repo pool).
 
    ```bash
-   helm upgrade --install my-workers ./chart \
+   helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+     --version 0.2.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -224,7 +221,8 @@ controller Deployment so a rollout keeps a single controller.
    For a warm pool of three idle workers instead:
 
    ```bash
-   helm upgrade --install my-workers ./chart \
+   helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+     --version 0.2.0 \
      --namespace cursord \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -237,7 +235,8 @@ controller Deployment so a rollout keeps a single controller.
    committing the key):
 
    ```bash
-   helm upgrade --install my-workers ./chart \
+   helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+     --version 0.2.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -245,20 +244,25 @@ controller Deployment so a rollout keeps a single controller.
      --set auth.apiKey='YOUR_SERVICE_ACCOUNT_API_KEY'
    ```
 
-4. Confirm the controller is up.
+3. Confirm the controller is up.
 
    ```bash
    kubectl -n cursord get deploy,pods -l app.kubernetes.io/instance=my-workers
    kubectl -n cursord logs -l app.kubernetes.io/component=controller -f
    ```
 
-5. Start an agent from [cursor.com/agents](https://cursor.com/agents)
+4. Start an agent from [cursor.com/agents](https://cursor.com/agents)
    (see [Run a cloud agent](#run-a-cloud-agent) below).
+
+To change the spawn hook or templates, clone the repository at the release tag
+(`git clone --branch v0.2.0 https://github.com/anysphere/k8s-workers.git`) and
+install `./chart` in place of the OCI reference.
 
 Render without installing:
 
 ```bash
-helm template my-workers ./chart \
+helm template my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+  --version 0.2.0 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key
@@ -274,33 +278,28 @@ Full values reference: [chart/README.md](chart/README.md).
 
 ## Versioning
 
-Each release is a git tag (`v0.2.0`, `v0.2.1`, and so on) that matches
-`version` in [`chart/Chart.yaml`](chart/Chart.yaml), and
-[`CHANGELOG.md`](CHANGELOG.md) records what changed in it. Pin a tag rather
-than `main`, which moves without notice. The
-[releases page](https://github.com/anysphere/k8s-workers/releases) lists each
-version with its notes and the packaged chart, which Helm installs without a
-clone:
+Each release has one version (`0.2.0`, `0.2.1`, and so on), the `version` in
+[`chart/Chart.yaml`](chart/Chart.yaml), published from the same commit as:
 
-```bash
-helm upgrade --install my-workers \
-  https://github.com/anysphere/k8s-workers/releases/download/v0.2.0/k8s-workers-0.2.0.tgz \
-  --namespace cursord --create-namespace \
-  --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
-  --set image.tag=YOUR_TAG \
-  --set pool=k8s-workers \
-  --set auth.existingSecret=cursor-workers-api-key
-```
+- the chart in `oci://ghcr.io/anysphere/charts/k8s-workers`, which is what
+  `helm install --version` pulls;
+- a git tag, `v0.2.0`;
+- a GitHub release on the
+  [releases page](https://github.com/anysphere/k8s-workers/releases) with that
+  version's [`CHANGELOG.md`](CHANGELOG.md) entry and the packaged chart.
+
+Pass `--version` to pin a release; without it Helm installs the newest.
 
 While the chart is 0.x, a minor release (0.2.x to 0.3.0) can rename values,
 change defaults, or change the resources it renders, so read its changelog
 entry before you upgrade. A patch release (0.2.0 to 0.2.1) needs no action from
 you.
 
-Argo CD and Flux can install the chart from this repository at a tag: in an
-Argo CD Application set `targetRevision` to the tag and `path` to `chart`, or
-set `ref.tag` on a Flux `GitRepository`. To mirror a release into your own
-registry, push its `k8s-workers-<version>.tgz` there.
+Argo CD and Flux install Helm charts from OCI registries: point them at
+`oci://ghcr.io/anysphere/charts`, chart `k8s-workers`, and a pinned version. To
+mirror a release into your own registry, run
+`helm pull oci://ghcr.io/anysphere/charts/k8s-workers --version <version>` and
+push the resulting `.tgz`.
 
 ## Run a cloud agent
 
@@ -382,7 +381,8 @@ Cursor-managed hibernation snapshots memory; this does not.
    leaves the claim `Pending` with `no storage class is set`.
 
    ```bash
-   helm upgrade --install my-workers ./chart \
+   helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
+     --version 0.2.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \

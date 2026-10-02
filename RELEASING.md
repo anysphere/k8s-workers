@@ -22,8 +22,10 @@ Pick the number by what an existing install needs:
 ## On merge
 
 The `release` job in CI runs `scripts/release-chart.sh` on every push to
-`main`. When no `v<version>` tag exists yet, it tags the merge commit and
+`main`. When no `v<version>` tag exists yet, it pushes the chart to
+`oci://ghcr.io/anysphere/charts/k8s-workers`, then tags the merge commit and
 creates a GitHub release with the version's `CHANGELOG.md` entry as notes and
 `k8s-workers-<version>.tgz` attached. Merges that keep the version do nothing.
 
-Never move or delete a published tag; ship a new patch release instead.
+Never move, delete, or overwrite a published version; ship a new patch release
+instead.

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Creates the GitHub release v<version> for chart/Chart.yaml at HEAD, with the
-# version's CHANGELOG.md entry as notes and the packaged chart attached. Does
-# nothing when the tag already exists, so merges that keep the version are
-# no-ops.
+# Publishes chart/Chart.yaml's version from HEAD: pushes the packaged chart to
+# the OCI registry in CHART_REGISTRY, then creates the GitHub release
+# v<version> with the version's CHANGELOG.md entry as notes and the package
+# attached. Does nothing when the tag already exists, so merges that keep the
+# version are no-ops. The tag is created last, so a failed push is retried on
+# the next run.
 #
-# Usage: GH_TOKEN=... scripts/release-chart.sh
+# Usage: CHART_REGISTRY=oci://ghcr.io/<owner>/charts GH_TOKEN=... scripts/release-chart.sh
+#        (log in to the registry with `helm registry login` first)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,6 +17,8 @@ fail() {
   echo "release-chart: $*" >&2
   exit 1
 }
+
+: "${CHART_REGISTRY:?set CHART_REGISTRY, e.g. oci://ghcr.io/anysphere/charts}"
 
 version="$(sed -n 's/^version:[[:space:]]*//p' chart/Chart.yaml | tr -d "\"'" | head -n 1)"
 tag="v${version}"
@@ -31,8 +36,10 @@ awk -v v="${version}" '$1 == "##" { if (found) exit; found = ($2 == v); next } f
 grep -q '[^[:space:]]' "${work}/notes.md" ||
   fail "CHANGELOG.md has no '## ${version}' entry"
 
+package="${work}/k8s-workers-${version}.tgz"
 helm package chart --destination "${work}" >/dev/null
-gh release create "${tag}" "${work}/k8s-workers-${version}.tgz" \
+helm push "${package}" "${CHART_REGISTRY}"
+gh release create "${tag}" "${package}" \
   --target "$(git rev-parse HEAD)" \
   --title "k8s-workers ${version}" \
   --notes-file "${work}/notes.md"
