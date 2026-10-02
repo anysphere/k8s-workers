@@ -277,7 +277,20 @@ Full values reference: [chart/README.md](chart/README.md).
 Each release is a git tag (`v0.2.0`, `v0.2.1`, and so on) that matches
 `version` in [`chart/Chart.yaml`](chart/Chart.yaml), and
 [`CHANGELOG.md`](CHANGELOG.md) records what changed in it. Pin a tag rather
-than `main`, which moves without notice.
+than `main`, which moves without notice. The
+[releases page](https://github.com/anysphere/k8s-workers/releases) lists each
+version with its notes and the packaged chart, which Helm installs without a
+clone:
+
+```bash
+helm upgrade --install my-workers \
+  https://github.com/anysphere/k8s-workers/releases/download/v0.2.0/k8s-workers-0.2.0.tgz \
+  --namespace cursord --create-namespace \
+  --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
+  --set image.tag=YOUR_TAG \
+  --set pool=k8s-workers \
+  --set auth.existingSecret=cursor-workers-api-key
+```
 
 While the chart is 0.x, a minor release (0.2.x to 0.3.0) can rename values,
 change defaults, or change the resources it renders, so read its changelog
@@ -287,8 +300,7 @@ you.
 Argo CD and Flux can install the chart from this repository at a tag: in an
 Argo CD Application set `targetRevision` to the tag and `path` to `chart`, or
 set `ref.tag` on a Flux `GitRepository`. To mirror a release into your own
-registry, run `helm package chart` in a checkout of the tag and push the
-resulting `k8s-workers-<version>.tgz`.
+registry, push its `k8s-workers-<version>.tgz` there.
 
 ## Run a cloud agent
 

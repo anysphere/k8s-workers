@@ -1,6 +1,7 @@
 # Releasing
 
-The cloud-harness and agent-runtime teams own releases and `v*` tags.
+The cloud-harness and agent-runtime teams own releases. Merging a version bump
+to `main` publishes it.
 
 ## In the pull request
 
@@ -18,15 +19,11 @@ Pick the number by what an existing install needs:
 - Patch (0.2.0 to 0.2.1) for everything else, including fixes and new optional
   values whose defaults render the same resources.
 
-## After the merge
+## On merge
 
-Tag the merge commit with the new version and push the tag:
+The `release` job in CI runs `scripts/release-chart.sh` on every push to
+`main`. When no `v<version>` tag exists yet, it tags the merge commit and
+creates a GitHub release with the version's `CHANGELOG.md` entry as notes and
+`k8s-workers-<version>.tgz` attached. Merges that keep the version do nothing.
 
-```bash
-git fetch origin main
-git tag -a v0.2.1 <merge-commit> -m "k8s-workers 0.2.1"
-git push origin v0.2.1
-```
-
-Then create a GitHub release from the tag with its `CHANGELOG.md` entry as the
-notes. Never move or delete a pushed tag; ship a new patch release instead.
+Never move or delete a published tag; ship a new patch release instead.
