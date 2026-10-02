@@ -7,9 +7,9 @@ release can need action from you, and its entry says what.
 
 First release, and the first published to
 `oci://ghcr.io/anysphere/charts/k8s-workers`. Every earlier commit on `main`
-also said `0.1.0`, so a `0.1.0` install could be any of them. If you installed from `419a3a0`, the last
-untagged `main`, 0.2.0 renders the same resources except for the
-`app.kubernetes.io/version` and `helm.sh/chart` labels. Those labels feed the
+also said `0.1.0`, so a `0.1.0` install could be any of them. If you installed
+from `419a3a0`, the last untagged `main`, 0.2.0 renders the same resources
+except for the `app.kubernetes.io/version` and `helm.sh/chart` labels. Those labels feed the
 controller's spawn-hook checksum, so the upgrade restarts the controller Pod
 once; running worker Pods are not part of the release and keep running.
 
