@@ -32,18 +32,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v4.1.0
-      - name: Log in to GitHub Container Registry
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: helm registry login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<<"${GH_TOKEN}"
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::946207870883:role/K8sWorkersChartPublishRole
+          aws-region: us-east-1
+      - name: Log in to Amazon ECR Public
+        run: aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
       - name: Release the chart version if it is not tagged yet
         env:
           GH_TOKEN: ${{ github.token }}
-          CHART_REGISTRY: oci://ghcr.io/anysphere/charts
+          CHART_REGISTRY: oci://public.ecr.aws/k0i0n2g5/charts
         run: ./scripts/release-chart.sh

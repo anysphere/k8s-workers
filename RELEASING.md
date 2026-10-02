@@ -22,10 +22,15 @@ Pick the number by what an existing install needs:
 ## On merge
 
 The `release` job in CI runs `scripts/release-chart.sh` on every push to
-`main`. When no `v<version>` tag exists yet, it pushes the chart to
-`oci://ghcr.io/anysphere/charts/k8s-workers`, then tags the merge commit and
-creates a GitHub release with the version's `CHANGELOG.md` entry as notes and
-`k8s-workers-<version>.tgz` attached. Merges that keep the version do nothing.
+`main`. When no `v<version>` tag exists yet, it pushes the chart to the Amazon
+ECR Public repository `oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers`, then
+tags the merge commit and creates a GitHub release with the version's
+`CHANGELOG.md` entry as notes and `k8s-workers-<version>.tgz` attached. Merges
+that keep the version do nothing.
+
+To push, the job exchanges GitHub's OIDC token for short-lived credentials for
+the AWS role `K8sWorkersChartPublishRole`, which trusts only this repository's
+`main` branch. No AWS keys are stored in the repository.
 
 Never move, delete, or overwrite a published version; ship a new patch release
 instead.

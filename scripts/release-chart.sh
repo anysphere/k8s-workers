@@ -6,7 +6,7 @@
 # version are no-ops. The tag is created last, so a failed push is retried on
 # the next run.
 #
-# Usage: CHART_REGISTRY=oci://ghcr.io/<owner>/charts GH_TOKEN=... scripts/release-chart.sh
+# Usage: CHART_REGISTRY=oci://public.ecr.aws/<alias>/charts GH_TOKEN=... scripts/release-chart.sh
 #        (log in to the registry with `helm registry login` first)
 set -euo pipefail
 
@@ -18,7 +18,7 @@ fail() {
   exit 1
 }
 
-: "${CHART_REGISTRY:?set CHART_REGISTRY, e.g. oci://ghcr.io/anysphere/charts}"
+: "${CHART_REGISTRY:?set CHART_REGISTRY, e.g. oci://public.ecr.aws/k0i0n2g5/charts}"
 
 version="$(sed -n 's/^version:[[:space:]]*//p' chart/Chart.yaml | tr -d "\"'" | head -n 1)"
 tag="v${version}"
