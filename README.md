@@ -5,10 +5,12 @@ your cluster. Cursor hosts the agent loop. An in-cluster
 `agent worker controller` kubectl-creates one worker Pod per spawn; each
 worker runs tool calls inside your cluster network.
 
-For the published `worker-set-controller` / `WorkerDeployment` path, see
-[Deploying with Kubernetes](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes).
-Use this sample for controller `--spawn` Pods (claim-then-spawn or
-`--warm-idle`).
+This chart replaces the deprecated `worker-set-controller` operator and its
+`WorkerDeployment` CRD. Clusters that already run the operator keep working,
+and the [operator reference](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes)
+stays available.
+[Differences from the deprecated operator](#differences-from-the-deprecated-operator)
+lists what changes when you move over.
 
 ## How it works
 
@@ -32,7 +34,7 @@ Use this sample for controller `--spawn` Pods (claim-then-spawn or
 | One-shot Pods | `restartPolicy: Never` — idle exit completes the Pod; next spawn creates a new one |
 | Claim or warm | `controller.warmIdle=0` claim-then-spawn, or `>0` for `--warm-idle N` |
 | Service account key | Long-lived `CURSOR_API_KEY` from a Secret |
-| Additive | Safe to run alongside `worker-set-controller` / `WorkerDeployment` |
+| No CRD | Installs no CRD or `WorkerDeployment`, so it can share a cluster with an existing operator install |
 | Hibernation | **Off by default.** Opt in with `hibernation.enabled=true` plus a pool reconnect window to keep a per-worker workspace volume across idle exits. See [Hibernation](#hibernation-opt-in) |
 
 ## Pool and repo modes
@@ -556,14 +558,15 @@ Only worker Pods serve these endpoints.
 | `ws-*` claim stuck `Terminating` | A `Succeeded`/`Failed` Pod still references it (`kubernetes.io/pvc-protection`). Delete those Pods; the reaper does this before deleting a claim |
 | Worker Pod fails at start with hibernation on | Worker image lacks `/bin/sh`; `seed.fromPath` missing in the image; `seed.cloneUrl` needs `git` and credentials |
 
-## Compared to the operator
+## Differences from the deprecated operator
 
 | Operator (`WorkerDeployment`) | This chart |
 | --- | --- |
 | `readyReplicas` = idle workers; busy-safe rolling updates | `--warm-idle` or claim-then-spawn; one-shot Pods |
-| Operator token exchange + `--auth-token-file` | Long-lived `CURSOR_API_KEY` Secret |
+| Operator exchanges the API key for short-lived tokens that workers read with `--auth-token-file` | Each worker Pod gets the long-lived service account key as `CURSOR_API_KEY`, in the environment where the agent runs commands |
 | `WorkerDeployment` + `worker-set-controller` | Vanilla Pods via `--spawn` |
 | Optional demand autoscaling / scale-to-zero | Claim-then-spawn (`warmIdle=0`) or fixed idle via `--warm-idle` |
+| Two controller replicas with leader election | One controller replica; nothing claims or spawns while it restarts, and connected workers keep running |
 
 ## Related resources
 
@@ -571,7 +574,7 @@ Only worker Pods serve these endpoints.
   ([Any repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#any-repo-pools),
   [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#pool-names),
   [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool#register-multiple-repo-roots))
-- [Deploying with Kubernetes](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes) (operator path)
+- [Deploying with Kubernetes](https://cursor.com/docs/cloud-agent/self-hosted-guides/kubernetes) (deprecated operator reference)
 - [Service accounts](https://cursor.com/docs/account/enterprise/service-accounts)
 - This repo: [`chart/`](chart/), [`scripts/helm-validate.sh`](scripts/helm-validate.sh)
 

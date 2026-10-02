@@ -3,5 +3,5 @@ name: k8s-workers
 version: 0.1.0
 appVersion: "0.1.0"
 type: application
-description: In-cluster agent worker controller that kubectl-creates Self-Hosted Machines worker Pods.
-  Not a replacement for worker-set-controller-chart / WorkerDeployment.
+description: Runs Cursor self-hosted pool workers as one-shot Pods spawned by agent worker controller.
+  Replaces the deprecated worker-set-controller-chart / WorkerDeployment operator.
