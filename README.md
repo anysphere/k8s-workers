@@ -191,10 +191,11 @@ controller Deployment so a rollout keeps a single controller.
 
 ## Install
 
-1. Clone this repository.
+1. Clone this repository at a release tag. Replace `v0.2.0` with the newest
+   tag on the [tags page](https://github.com/anysphere/k8s-workers/tags).
 
    ```bash
-   git clone https://github.com/anysphere/k8s-workers.git
+   git clone --branch v0.2.0 https://github.com/anysphere/k8s-workers.git
    cd k8s-workers
    ```
 
@@ -270,6 +271,24 @@ Local lint / kubeconform (optional):
 ```
 
 Full values reference: [chart/README.md](chart/README.md).
+
+## Versioning
+
+Each release is a git tag (`v0.2.0`, `v0.2.1`, and so on) that matches
+`version` in [`chart/Chart.yaml`](chart/Chart.yaml), and
+[`CHANGELOG.md`](CHANGELOG.md) records what changed in it. Pin a tag rather
+than `main`, which moves without notice.
+
+While the chart is 0.x, a minor release (0.2.x to 0.3.0) can rename values,
+change defaults, or change the resources it renders, so read its changelog
+entry before you upgrade. A patch release (0.2.0 to 0.2.1) needs no action from
+you.
+
+Argo CD and Flux can install the chart from this repository at a tag: in an
+Argo CD Application set `targetRevision` to the tag and `path` to `chart`, or
+set `ref.tag` on a Flux `GitRepository`. To mirror a release into your own
+registry, run `helm package chart` in a checkout of the tag and push the
+resulting `k8s-workers-<version>.tgz`.
 
 ## Run a cloud agent
 
