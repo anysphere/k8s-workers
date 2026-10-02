@@ -42,8 +42,9 @@ Your worker image must include the `agent` CLI, `git` on `PATH`, and a
 workspace at `workerDir` (see [Prerequisites](../README.md#prerequisites)).
 The controller container additionally needs `kubectl`.
 
-The chart is published to `oci://ghcr.io/anysphere/charts/k8s-workers`. Replace
-`0.2.0` below with the version you want from the
+The chart is published to Amazon ECR Public at
+`oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers`, and installing it needs no
+registry login. Replace `0.2.1` below with the version you want from the
 [releases page](https://github.com/anysphere/k8s-workers/releases).
 
 ### Existing Secret
@@ -53,8 +54,8 @@ kubectl create secret generic cursor-workers-api-key \
   --from-literal=api-key='YOUR_SERVICE_ACCOUNT_API_KEY' \
   -n cursord
 
-helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
-  --version 0.2.0 \
+helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
+  --version 0.2.1 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -66,8 +67,8 @@ helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
 ### Chart-managed Secret
 
 ```bash
-helm upgrade --install my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
-  --version 0.2.0 \
+helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
+  --version 0.2.1 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -80,8 +81,8 @@ Prefer `--set` or a gitignored values overlay over committing `auth.apiKey`.
 Render without installing:
 
 ```bash
-helm template my-workers oci://ghcr.io/anysphere/charts/k8s-workers \
-  --version 0.2.0 \
+helm template my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
+  --version 0.2.1 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=sample \
   --set auth.existingSecret=cursor-workers-api-key

@@ -3,15 +3,29 @@
 Each release is a git tag named `v<version>`. While the chart is 0.x, a minor
 release can need action from you, and its entry says what.
 
+## 0.2.1
+
+The first release you can install from a public registry, with no login:
+
+```bash
+helm install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers --version 0.2.1
+```
+
+The chart renders the same resources as 0.2.0 except for the
+`app.kubernetes.io/version` and `helm.sh/chart` labels. As with 0.2.0, the
+label change restarts the controller Pod once on upgrade; running worker Pods
+keep running.
+
 ## 0.2.0
 
-First release, and the first published to
-`oci://ghcr.io/anysphere/charts/k8s-workers`. Every earlier commit on `main`
-also said `0.1.0`, so a `0.1.0` install could be any of them. If you installed
-from `419a3a0`, the last untagged `main`, 0.2.0 renders the same resources
-except for the `app.kubernetes.io/version` and `helm.sh/chart` labels. Those labels feed the
-controller's spawn-hook checksum, so the upgrade restarts the controller Pod
-once; running worker Pods are not part of the release and keep running.
+First release. Its registry copy is private, so 0.2.0 is available only as the
+`.tgz` attached to its GitHub release. Every earlier commit on `main` also said
+`0.1.0`, so a `0.1.0` install could be any of them. If you installed from
+`419a3a0`, the last untagged `main`, 0.2.0 renders the same resources except
+for the `app.kubernetes.io/version` and `helm.sh/chart` labels. Those labels
+feed the controller's spawn-hook checksum, so the upgrade restarts the
+controller Pod once; running worker Pods are not part of the release and keep
+running.
 
 Changes since the September 2 launch, for installs taken from an earlier
 commit:
