@@ -167,17 +167,37 @@ PY
   fi
 }
 
-# Mock kubectl. `create` records each manifest as created-N.yaml in MOCK_DIR.
+# Mock kubectl. Every argv is appended to argv.log. `create` records each
+# manifest as created-N.yaml in MOCK_DIR; with `-o jsonpath=...` it prints
+# "<generateName>mock1/<MOCK_POD_UID>" the way the API server would. A Secret is
+# rejected (saved as rejected-secret.yaml) when MOCK_FAIL_SECRET is set.
 # `get pvc` answers from MOCK_PVC_STATE: empty means NotFound, otherwise the
 # jsonpath the hook asks for ("Bound/" bound, "Bound/<ts>" terminating).
-# `annotate` is recorded in annotate.log.
-cat >"${WORKDIR}/kubectl" <<'EOF'
+# `annotate` is recorded in annotate.log and `delete` in delete.log.
+MOCK_POD_UID="0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+cat >"${WORKDIR}/kubectl" <<EOF
 #!/bin/sh
+MOCK_POD_UID="${MOCK_POD_UID}"
+EOF
+cat >>"${WORKDIR}/kubectl" <<'EOF'
+echo "$*" >>"${MOCK_DIR}/argv.log"
 case "$1" in
   create)
     n=$(ls "${MOCK_DIR}" | grep -c '^created-' || true)
-    cat >"${MOCK_DIR}/created-$((n + 1)).yaml"
-    echo "mock/created"
+    manifest="$(cat)"
+    if [ -n "${MOCK_FAIL_SECRET:-}" ] && printf '%s\n' "${manifest}" | grep -q '^kind: Secret$'; then
+      printf '%s\n' "${manifest}" >"${MOCK_DIR}/rejected-secret.yaml"
+      echo "Error from server (Forbidden): secrets is forbidden" >&2
+      exit 1
+    fi
+    printf '%s\n' "${manifest}" >"${MOCK_DIR}/created-$((n + 1)).yaml"
+    case "$*" in
+      *jsonpath*)
+        gen="$(printf '%s\n' "${manifest}" | sed -n 's/^  generateName: "\(.*\)"$/\1/p')"
+        printf '%s' "${gen}mock1/${MOCK_POD_UID}"
+        ;;
+      *) echo "mock/created" ;;
+    esac
     ;;
   -n)
     shift 2
@@ -191,6 +211,9 @@ case "$1" in
         ;;
       annotate)
         echo "$*" >>"${MOCK_DIR}/annotate.log"
+        ;;
+      delete)
+        echo "$*" >>"${MOCK_DIR}/delete.log"
         ;;
       *)
         echo "unexpected kubectl args: -n ... $*" >&2
@@ -433,6 +456,162 @@ sh "${ENTRY_HOME}/entrypoint.sh" true 2>"${ENTRY_HOME}/err2"
 file_contains "${ENTRY_HOME}/err2" "already populated; resuming"
 [ -f "${ENTRY_HOME}/ws/scratch.txt" ]
 
+# ---------------------------------------------------------------------------
+# Session tokens. Off (the default) keeps the service account key in worker
+# Pods and adds no Secret RBAC.
+must_not_contain "--session-token"
+must_not_contain "--auth-token-file"
+must_not_contain '"secrets"'
+must_not_contain '"delete"'
+must_not_contain "token-secret.yaml"
+file_contains "${WORKDIR}/hooks-off/worker-pod.yaml" "name: CURSOR_API_KEY"
+
+expect_fail "sessionToken with warmIdle" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set auth.sessionToken=true --set controller.warmIdle=2
+expect_fail "sessionToken without controller" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set auth.sessionToken=true --set controller.enabled=false
+expect_fail "--session-token in controller.extraArgs without auth.sessionToken" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set 'controller.extraArgs[0]=--session-token'
+
+SESSION_RENDER="${WORKDIR}/session.yaml"
+helm template test-release "${CHART}" \
+  --namespace cursord \
+  --set image.repository=example.local/cursor-worker \
+  --set image.tag=test \
+  --set pool=gpu \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set auth.sessionToken=true \
+  >"${SESSION_RENDER}"
+file_contains "${SESSION_RENDER}" "            - --session-token"
+file_contains "${SESSION_RENDER}" 'resources: ["secrets"]'
+file_contains "${SESSION_RENDER}" 'verbs: ["create"]'
+file_contains "${SESSION_RENDER}" 'verbs: ["create", "get", "list", "delete"]'
+file_contains "${SESSION_RENDER}" "token-secret.yaml: |"
+# Only the controller Deployment holds the service account key.
+[ "$(grep -c -F "name: CURSOR_API_KEY" "${SESSION_RENDER}")" = "1" ] \
+  || { echo "sessionToken: CURSOR_API_KEY must appear only on the controller" >&2; exit 1; }
+python3 - "${SESSION_RENDER}" <<'PY'
+import sys
+from pathlib import Path
+
+docs = Path(sys.argv[1]).read_text().split("\n---")
+deploy = [d for d in docs if "\nkind: Deployment" in d]
+if len(deploy) != 1 or "name: CURSOR_API_KEY" not in deploy[0]:
+    raise SystemExit("sessionToken: the controller Deployment must keep CURSOR_API_KEY")
+PY
+
+extract_hooks "${SESSION_RENDER}" "${WORKDIR}/hooks-session"
+[ -s "${WORKDIR}/hooks-session/token-secret.yaml" ] || { echo "sessionToken ConfigMap missing token-secret.yaml" >&2; exit 1; }
+sh -n "${WORKDIR}/hooks-session/spawn-pod.sh"
+file_lacks "${WORKDIR}/hooks-session/worker-pod.yaml" "CURSOR_API_KEY"
+file_lacks "${WORKDIR}/hooks-session/worker-pod.yaml" "secretKeyRef"
+file_contains "${WORKDIR}/hooks-session/worker-pod.yaml" "- --auth-token-file"
+file_contains "${WORKDIR}/hooks-session/worker-pod.yaml" '- "/var/run/cursor/token"'
+file_contains "${WORKDIR}/hooks-session/worker-pod.yaml" 'mountPath: "/var/run/cursor"'
+file_contains "${WORKDIR}/hooks-session/worker-pod.yaml" 'secretName: "${TOKEN_SECRET}"'
+grep -B12 -F -- "- start" "${WORKDIR}/hooks-session/worker-pod.yaml" | grep -F -- "--auth-token-file" >/dev/null \
+  || { echo "--auth-token-file must come before start" >&2; exit 1; }
+
+TOKEN="test-session-token.not-a-real.jwt_value-123"
+EXPIRES="2026-10-06T18:00:00.000Z"
+
+# Claim: create the Pod, then a Secret owned by it holding the token.
+run_hook "session/claim" "${WORKDIR}/hooks-session" "${WORKDIR}/session-claim" \
+  CURSOR_AUTH_TOKEN="${TOKEN}" CURSOR_AUTH_TOKEN_EXPIRES_AT="${EXPIRES}"
+[ "$(created_count "${WORKDIR}/session-claim")" = "2" ] || { echo "session/claim must create the Pod then its Secret" >&2; exit 1; }
+SESSION_POD="${WORKDIR}/session-claim/created-1.yaml"
+SESSION_SECRET="${WORKDIR}/session-claim/created-2.yaml"
+file_contains "${SESSION_POD}" "kind: Pod"
+file_contains "${SESSION_POD}" "generateName: \"${WORKER_ID}-\""
+file_contains "${SESSION_POD}" "--auth-token-file"
+file_lacks "${SESSION_POD}" "CURSOR_API_KEY"
+file_lacks "${SESSION_POD}" "${TOKEN}"
+file_lacks "${SESSION_POD}" '${TOKEN_SECRET}'
+file_contains "${SESSION_SECRET}" "kind: Secret"
+file_contains "${SESSION_SECRET}" "app.kubernetes.io/component: worker-token"
+file_contains "${SESSION_SECRET}" "cursor.com/worker-id: \"${WORKER_ID}\""
+file_contains "${SESSION_SECRET}" "cursor.com/token-expires-at: \"${EXPIRES}\""
+file_contains "${SESSION_SECRET}" "kind: Pod"
+file_contains "${SESSION_SECRET}" "name: \"${WORKER_ID}-mock1\""
+file_contains "${SESSION_SECRET}" "uid: \"${MOCK_POD_UID}\""
+file_contains "${SESSION_SECRET}" "token: \"${TOKEN}\""
+file_lacks "${SESSION_SECRET}" '${'
+pod_secret="$(sed -n 's/^ *secretName: "\(.*\)"$/\1/p' "${SESSION_POD}")"
+secret_name="$(sed -n 's/^  name: "\(.*\)"$/\1/p' "${SESSION_SECRET}")"
+case "${secret_name}" in
+  "tok-${WORKER_ID}-"????????) ;;
+  *) echo "unexpected token Secret name: ${secret_name}" >&2; exit 1 ;;
+esac
+[ "${pod_secret}" = "${secret_name}" ] || { echo "Pod mounts ${pod_secret} but the hook created ${secret_name}" >&2; exit 1; }
+file_lacks "${WORKDIR}/session-claim/argv.log" "${TOKEN}"
+file_lacks "${WORKDIR}/session-claim/hook.out" "${TOKEN}"
+[ ! -e "${WORKDIR}/session-claim/delete.log" ] || { echo "session/claim must not delete anything" >&2; exit 1; }
+
+# Wake: a fresh token for the same claim lands in a new Secret for the new Pod.
+run_hook "session/wake" "${WORKDIR}/hooks-session" "${WORKDIR}/session-wake" \
+  CURSOR_WAKE=1 CURSOR_AUTH_TOKEN="${TOKEN}" CURSOR_AUTH_TOKEN_EXPIRES_AT="${EXPIRES}"
+[ "$(created_count "${WORKDIR}/session-wake")" = "2" ] || { echo "session/wake must create the Pod then its Secret" >&2; exit 1; }
+wake_secret="$(sed -n 's/^  name: "\(.*\)"$/\1/p' "${WORKDIR}/session-wake/created-2.yaml")"
+[ "${wake_secret}" != "${secret_name}" ] || { echo "each Pod must get its own token Secret" >&2; exit 1; }
+
+# An unexpected expiry is dropped rather than failing the spawn.
+run_hook "session/odd-expiry" "${WORKDIR}/hooks-session" "${WORKDIR}/session-odd-expiry" \
+  CURSOR_AUTH_TOKEN="${TOKEN}" CURSOR_AUTH_TOKEN_EXPIRES_AT='soon"; x'
+file_contains "${WORKDIR}/session-odd-expiry/created-2.yaml" 'cursor.com/token-expires-at: ""'
+file_contains "${WORKDIR}/session-odd-expiry/hook.out" "ignoring unexpected CURSOR_AUTH_TOKEN_EXPIRES_AT"
+
+expect_hook_fail "session/no-token" "${WORKDIR}/hooks-session" "${WORKDIR}/session-no-token" 1
+file_contains "${WORKDIR}/session-no-token/hook.out" "CURSOR_AUTH_TOKEN is required"
+expect_hook_fail "session/unsafe-token" "${WORKDIR}/hooks-session" "${WORKDIR}/session-unsafe-token" 1 \
+  CURSOR_AUTH_TOKEN='abc"def'
+
+# Secret rejected: the Pod could never start, so the hook deletes it and fails.
+mkdir -p "${WORKDIR}/session-secret-fail"
+rc=0
+env -i PATH="${WORKDIR}:${PATH}" MOCK_DIR="${WORKDIR}/session-secret-fail" MOCK_FAIL_SECRET=1 \
+  CURSOR_AGENT_WORKER_ID="${WORKER_ID}" CURSOR_POOL="gpu" CURSOR_AUTH_TOKEN="${TOKEN}" \
+  "${WORKDIR}/hooks-session/spawn-pod.sh" >"${WORKDIR}/session-secret-fail/hook.out" 2>&1 || rc=$?
+[ "${rc}" = "1" ] || { cat "${WORKDIR}/session-secret-fail/hook.out" >&2; echo "secret failure must exit 1, got ${rc}" >&2; exit 1; }
+file_contains "${WORKDIR}/session-secret-fail/delete.log" "delete pod ${WORKER_ID}-mock1"
+file_contains "${WORKDIR}/session-secret-fail/hook.out" "deleting Pod ${WORKER_ID}-mock1"
+file_lacks "${WORKDIR}/session-secret-fail/argv.log" "${TOKEN}"
+
+# Session tokens with hibernation: PVC, then Pod with both mounts, then Secret.
+SESSION_HIB_RENDER="${WORKDIR}/session-hibernation.yaml"
+helm template test-release "${CHART}" \
+  --namespace cursord \
+  --set image.repository=example.local/cursor-worker \
+  --set image.tag=test \
+  --set pool=gpu \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set auth.sessionToken=true \
+  --set hibernation.enabled=true \
+  >"${SESSION_HIB_RENDER}"
+file_contains "${SESSION_HIB_RENDER}" 'resources: ["secrets"]'
+file_contains "${SESSION_HIB_RENDER}" 'verbs: ["create", "get", "list", "patch"]'
+extract_hooks "${SESSION_HIB_RENDER}" "${WORKDIR}/hooks-session-hib"
+run_hook "session+hibernation/claim" "${WORKDIR}/hooks-session-hib" "${WORKDIR}/session-hib-claim" \
+  CURSOR_AUTH_TOKEN="${TOKEN}" CURSOR_AUTH_TOKEN_EXPIRES_AT="${EXPIRES}"
+[ "$(created_count "${WORKDIR}/session-hib-claim")" = "3" ] || { echo "session+hibernation must create PVC, Pod, Secret" >&2; exit 1; }
+file_contains "${WORKDIR}/session-hib-claim/created-1.yaml" "kind: PersistentVolumeClaim"
+SESSION_HIB_POD="${WORKDIR}/session-hib-claim/created-2.yaml"
+file_contains "${SESSION_HIB_POD}" "claimName: \"ws-${WORKER_ID}\""
+file_contains "${SESSION_HIB_POD}" "secretName: \"tok-${WORKER_ID}-"
+file_contains "${SESSION_HIB_POD}" "/cursor-hooks/entrypoint.sh"
+file_lacks "${SESSION_HIB_POD}" "CURSOR_API_KEY"
+file_contains "${WORKDIR}/session-hib-claim/created-3.yaml" "kind: Secret"
+run_hook "session+hibernation/wake" "${WORKDIR}/hooks-session-hib" "${WORKDIR}/session-hib-wake" \
+  CURSOR_WAKE=1 MOCK_PVC_STATE="Bound/" CURSOR_AUTH_TOKEN="${TOKEN}"
+[ "$(created_count "${WORKDIR}/session-hib-wake")" = "2" ] || { echo "session+hibernation wake must create Pod then Secret" >&2; exit 1; }
+expect_hook_fail "session+hibernation/wake/missing" "${WORKDIR}/hooks-session-hib" "${WORKDIR}/session-hib-wake-missing" 3 \
+  CURSOR_WAKE=1 CURSOR_AUTH_TOKEN="${TOKEN}"
+
 # Controller enabled is the default; an explicit true must still render.
 helm template test-release "${CHART}" \
   --set image.repository=example.local/cursor-worker \
@@ -495,6 +674,11 @@ if command -v kubeconform >/dev/null 2>&1; then
   kubeconform -strict -ignore-missing-schemas -summary "${HIB_RENDER}"
   kubeconform -strict -ignore-missing-schemas -summary "${PVC_OUT}"
   kubeconform -strict -ignore-missing-schemas -summary "${HIB_POD}"
+  kubeconform -strict -ignore-missing-schemas -summary "${SESSION_RENDER}"
+  kubeconform -strict -ignore-missing-schemas -summary "${SESSION_POD}"
+  kubeconform -strict -ignore-missing-schemas -summary "${SESSION_SECRET}"
+  kubeconform -strict -ignore-missing-schemas -summary "${SESSION_HIB_RENDER}"
+  kubeconform -strict -ignore-missing-schemas -summary "${SESSION_HIB_POD}"
 fi
 
 echo "helm-validate: ok"
