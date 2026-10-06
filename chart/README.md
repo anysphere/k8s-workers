@@ -47,7 +47,7 @@ The controller container additionally needs `kubectl`.
 
 The chart is published to Amazon ECR Public at
 `oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers`, and installing it needs no
-registry login. Replace `0.3.0` below with the version you want from the
+registry login. Replace `0.2.2` below with the version you want from the
 [releases page](https://github.com/anysphere/k8s-workers/releases).
 
 ### Existing Secret
@@ -58,7 +58,7 @@ kubectl create secret generic cursor-workers-api-key \
   -n cursord
 
 helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.3.0 \
+  --version 0.2.2 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -71,7 +71,7 @@ helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-worke
 
 ```bash
 helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.3.0 \
+  --version 0.2.2 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -85,7 +85,7 @@ Render without installing:
 
 ```bash
 helm template my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.3.0 \
+  --version 0.2.2 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=sample \
   --set auth.existingSecret=cursor-workers-api-key

@@ -193,7 +193,7 @@ controller Deployment so a rollout keeps a single controller.
 
 The chart is published to Amazon ECR Public at
 `oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers`, and installing it needs no
-registry login. These steps pin `0.3.0`; replace it with the newest version on
+registry login. These steps pin `0.2.2`; replace it with the newest version on
 the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
 1. Create a namespace and store the service account API key.
@@ -210,7 +210,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.3.0 \
+     --version 0.2.2 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -227,7 +227,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.3.0 \
+     --version 0.2.2 \
      --namespace cursord \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -241,7 +241,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.3.0 \
+     --version 0.2.2 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -260,14 +260,14 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
    (see [Run a cloud agent](#run-a-cloud-agent) below).
 
 To change the spawn hook or templates, clone the repository at the release tag
-(`git clone --branch v0.3.0 https://github.com/anysphere/k8s-workers.git`) and
+(`git clone --branch v0.2.2 https://github.com/anysphere/k8s-workers.git`) and
 install `./chart` in place of the OCI reference.
 
 Render without installing:
 
 ```bash
 helm template my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.3.0 \
+  --version 0.2.2 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key
@@ -363,7 +363,7 @@ give it, and the chart fails the render if you combine the two.
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.3.0 \
+     --version 0.2.2 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -387,9 +387,9 @@ give it, and the chart fails the render if you combine the two.
 
 The operator's `--auth-token-file` setup maps to `auth.sessionToken=true` with
 `controller.warmIdle=0`. You do not need to patch the worker Pod template or
-add `--session-token` to `controller.extraArgs`. With `auth.sessionToken` off,
-the chart refuses `--session-token` in `controller.extraArgs`, because the
-flag on its own still leaves the key in every worker Pod.
+add `--session-token` to `controller.extraArgs`. That flag on its own still
+leaves the key in every worker Pod, so with `auth.sessionToken` off the
+install NOTES print a warning when `controller.extraArgs` contains it.
 
 ### What changes
 
@@ -461,7 +461,7 @@ Cursor-managed hibernation snapshots memory; this does not.
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.3.0 \
+     --version 0.2.2 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \

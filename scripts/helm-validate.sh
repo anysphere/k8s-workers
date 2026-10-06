@@ -474,10 +474,19 @@ expect_fail "sessionToken without controller" \
   --set image.repository=example.local/cursor-worker --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key \
   --set auth.sessionToken=true --set controller.enabled=false
-expect_fail "--session-token in controller.extraArgs without auth.sessionToken" \
+# --session-token in controller.extraArgs alone still renders, but NOTES warn
+# that worker Pods keep the key.
+helm install --dry-run=client test-release "${CHART}" \
   --set image.repository=example.local/cursor-worker --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key \
-  --set 'controller.extraArgs[0]=--session-token'
+  --set 'controller.extraArgs[0]=--session-token' \
+  >"${WORKDIR}/extra-session-flag.txt"
+file_contains "${WORKDIR}/extra-session-flag.txt" "WARNING: controller.extraArgs passes --session-token"
+helm install --dry-run=client test-release "${CHART}" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  >"${WORKDIR}/default-notes.txt"
+file_lacks "${WORKDIR}/default-notes.txt" "WARNING"
 
 SESSION_RENDER="${WORKDIR}/session.yaml"
 helm template test-release "${CHART}" \

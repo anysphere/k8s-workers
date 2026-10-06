@@ -14,6 +14,12 @@ tok-<worker-id>-<suffix>, which Kubernetes deletes with the Pod.
 Worker auth: service account key (CURSOR_API_KEY) in every worker Pod. Set
 auth.sessionToken=true (claim mode, controller.warmIdle=0) to keep the key in
 the controller Pod only.
+{{- if has "--session-token" .Values.controller.extraArgs }}
+
+WARNING: controller.extraArgs passes --session-token, but auth.sessionToken is
+off, so every worker Pod still gets CURSOR_API_KEY. Remove the flag from
+controller.extraArgs and set auth.sessionToken=true instead.
+{{- end }}
 {{- end }}
 Hibernation: {{ ternary "ON" "off (one-shot Pods, no PersistentVolumeClaims)" .Values.hibernation.enabled }}
 {{- if .Values.hibernation.enabled }}

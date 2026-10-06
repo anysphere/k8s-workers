@@ -207,8 +207,6 @@ Required calls are assigned so this helper emits no YAML.
 {{- if gt $warmIdle 0 -}}
 {{- fail "auth.sessionToken requires controller.warmIdle=0. A session token serves one claim, and warm workers start before any claim." -}}
 {{- end -}}
-{{- else if has "--session-token" .Values.controller.extraArgs -}}
-{{- fail "Set auth.sessionToken=true instead of passing --session-token in controller.extraArgs. The flag alone still gives every worker Pod CURSOR_API_KEY." -}}
 {{- end -}}
 {{- if .Values.hibernation.enabled -}}
 {{- if not .Values.controller.enabled -}}
