@@ -64,14 +64,58 @@ data:
       echo "spawn-pod: could not derive a DNS-1123 name from CURSOR_AGENT_WORKER_ID" >&2
       exit 1
     fi
+    {{- if .Values.auth.sessionToken }}
+
+    # auth.sessionToken: the controller runs with --session-token and passes a
+    # token that serves only this claim (a fresh one on a wake) instead of the
+    # service account key. It goes into a Secret owned by the worker Pod, which
+    # reads it with --auth-token-file. The Pod is created first so the Secret
+    # can carry its ownerReference; the kubelet holds the container until the
+    # Secret exists. Also needs /proc/sys/kernel/random/uuid for the name.
+    TOKEN="${CURSOR_AUTH_TOKEN:-}"
+    if [ -z "${TOKEN}" ]; then
+      echo "spawn-pod: CURSOR_AUTH_TOKEN is required with auth.sessionToken; is the controller running with --session-token?" >&2
+      exit 1
+    fi
+    case "${TOKEN}" in
+      *[!A-Za-z0-9._~+/=-]*)
+        echo "spawn-pod: refusing to write a CURSOR_AUTH_TOKEN with unexpected characters" >&2
+        exit 1
+        ;;
+    esac
+    TOKEN_EXPIRES_AT="${CURSOR_AUTH_TOKEN_EXPIRES_AT:-}"
+    case "${TOKEN_EXPIRES_AT}" in
+      *[!A-Za-z0-9.:+_-]*)
+        echo "spawn-pod: ignoring unexpected CURSOR_AUTH_TOKEN_EXPIRES_AT" >&2
+        TOKEN_EXPIRES_AT=""
+        ;;
+    esac
+    read -r nonce </proc/sys/kernel/random/uuid
+    nonce="${nonce%%-*}"
+    case "${nonce}" in
+      ""|*[!0-9a-f]*)
+        echo "spawn-pod: could not read a random suffix from /proc/sys/kernel/random/uuid" >&2
+        exit 1
+        ;;
+    esac
+    TOKEN_SECRET="tok-${WORKER_SLUG}-${nonce}"
+    POD_NAME=""
+    POD_UID=""
+    {{- end }}
 
     # Only these tokens are substituted; every other $ (for example in a
-    # custom command) passes through untouched. The three values are validated
-    # above to characters that are inert in a sed replacement.
+    # custom command) passes through untouched. Each value is validated before
+    # use to characters that are inert in a sed replacement.
     render() {
       sed -e "s|\${WORKER_SLUG}|${WORKER_SLUG}|g" \
           -e "s|\${WORKER_ID}|${WORKER_ID}|g" \
           -e "s|\${POOL}|${POOL}|g" \
+          {{- if .Values.auth.sessionToken }}
+          -e "s|\${TOKEN_SECRET}|${TOKEN_SECRET}|g" \
+          -e "s|\${POD_NAME}|${POD_NAME}|g" \
+          -e "s|\${POD_UID}|${POD_UID}|g" \
+          -e "s|\${TOKEN_EXPIRES_AT}|${TOKEN_EXPIRES_AT}|g" \
+          {{- end }}
           "${HOOKS_DIR}/$1"
     }
 
@@ -119,9 +163,45 @@ data:
     fi
 
     echo "spawn-pod: kubectl create Pod ${WORKER_SLUG}-* pool=${POOL} namespace=${NAMESPACE} wake=${WAKE:-0} hibernation=${HIBERNATION}" >&2
+    {{- if .Values.auth.sessionToken }}
+    created="$(render worker-pod.yaml | kubectl create -f - -o 'jsonpath={.metadata.name}/{.metadata.uid}')"
+    case "${created}" in
+      */*) ;;
+      *)
+        echo "spawn-pod: unexpected kubectl create output: ${created}" >&2
+        exit 1
+        ;;
+    esac
+    POD_NAME="${created%%/*}"
+    POD_UID="${created#*/}"
+    for v in "${POD_NAME}" "${POD_UID}"; do
+      case "${v}" in
+        ""|*[!a-z0-9.-]*)
+          echo "spawn-pod: unexpected kubectl create output: ${created}" >&2
+          exit 1
+          ;;
+      esac
+    done
+
+    echo "spawn-pod: kubectl create Secret ${TOKEN_SECRET} owned by Pod ${POD_NAME}" >&2
+    # printf is a builtin in dash, bash, and busybox ash, so the token reaches
+    # kubectl on stdin only, never in a process argv.
+    if ! { render token-secret.yaml; printf 'stringData:\n  token: "%s"\n' "${TOKEN}"; } \
+        | kubectl create -f - >/dev/null; then
+      echo "spawn-pod: creating Secret ${TOKEN_SECRET} failed; deleting Pod ${POD_NAME}" >&2
+      kubectl -n "${NAMESPACE}" delete pod "${POD_NAME}" --wait=false >/dev/null || true
+      exit 1
+    fi
+    echo "pod/${POD_NAME} created"
+    {{- else }}
     render worker-pod.yaml | kubectl create -f -
+    {{- end }}
   worker-pod.yaml: |
 {{ include "cursor-worker-pool.workerPod" . | indent 4 }}
+  {{- if .Values.auth.sessionToken }}
+  token-secret.yaml: |
+{{ include "cursor-worker-pool.tokenSecret" . | indent 4 }}
+  {{- end }}
   {{- if .Values.hibernation.enabled }}
   workspace-pvc.yaml: |
 {{ include "cursor-worker-pool.workspacePvc" . | indent 4 }}

@@ -47,6 +47,13 @@ auth:
   # If set and existingSecret is empty, the chart creates a Secret. Do not
   # commit a real key; pass --set auth.apiKey=... or a values overlay.
   apiKey: ""
+  # Keep the service account key in the controller Pod only. The controller
+  # runs with --session-token and hands the spawn hook a short-lived token that
+  # serves one claim; the hook stores it in a Secret owned by that worker Pod
+  # and the worker reads it with --auth-token-file. Claim mode only: requires
+  # controller.warmIdle=0. Adds create on Secrets and delete on Pods to the
+  # controller Role; with rbac.create=false, grant those yourself.
+  sessionToken: false
 
 # In-cluster `agent worker controller`. Workers are created by --spawn as
 # standalone Pods (kubectl create), not by patching a Deployment or HPA.
@@ -131,7 +138,8 @@ hibernation:
         memory: 128Mi
 
 # Namespace Role granting the controller ServiceAccount create/get/list on Pods
-# (plus create/get/list/patch on PersistentVolumeClaims with hibernation).
+# (plus create/get/list/patch on PersistentVolumeClaims with hibernation, and
+# create on Secrets plus delete on Pods with auth.sessionToken).
 rbac:
   create: true
 

@@ -6,6 +6,21 @@ the WorkerDeployment operator.
 
 Pool: {{ .Values.pool }}
 Controller warmIdle: {{ .Values.controller.warmIdle | default 0 }}
+{{- if .Values.auth.sessionToken }}
+Worker auth: session tokens. Only the controller Pod holds the service account
+key. Each worker Pod reads a token that serves only its claim from a Secret
+tok-<worker-id>-<suffix>, which Kubernetes deletes with the Pod.
+{{- else }}
+Worker auth: service account key (CURSOR_API_KEY) in every worker Pod. Set
+auth.sessionToken=true (claim mode, controller.warmIdle=0) to keep the key in
+the controller Pod only.
+{{- if has "--session-token" .Values.controller.extraArgs }}
+
+WARNING: controller.extraArgs passes --session-token, but auth.sessionToken is
+off, so every worker Pod still gets CURSOR_API_KEY. Remove the flag from
+controller.extraArgs and set auth.sessionToken=true instead.
+{{- end }}
+{{- end }}
 Hibernation: {{ ternary "ON" "off (one-shot Pods, no PersistentVolumeClaims)" .Values.hibernation.enabled }}
 {{- if .Values.hibernation.enabled }}
 

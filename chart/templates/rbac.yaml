@@ -9,9 +9,21 @@ metadata:
     {{- include "cursor-worker-pool.labels" . | nindent 4 }}
     app.kubernetes.io/component: controller
 rules:
+  {{- if .Values.auth.sessionToken }}
+  # delete only removes a Pod whose token Secret could not be created.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+  # create only: the controller can add token Secrets but cannot read, change,
+  # or delete any Secret, including the one holding the API key.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  {{- else }}
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["create", "get", "list"]
+  {{- end }}
   {{- if .Values.hibernation.enabled }}
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]

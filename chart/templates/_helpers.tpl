@@ -200,6 +200,14 @@ Required calls are assigned so this helper emits no YAML.
 {{- if and .Values.controller.enabled (not .Values.serviceAccount.automount) -}}
 {{- fail "controller.enabled requires serviceAccount.automount=true so kubectl in the spawn hook can create Pods." -}}
 {{- end -}}
+{{- if .Values.auth.sessionToken -}}
+{{- if not .Values.controller.enabled -}}
+{{- fail "auth.sessionToken requires controller.enabled=true (the controller mints each claim's token and the spawn hook stores it)." -}}
+{{- end -}}
+{{- if gt $warmIdle 0 -}}
+{{- fail "auth.sessionToken requires controller.warmIdle=0. A session token serves one claim, and warm workers start before any claim." -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.hibernation.enabled -}}
 {{- if not .Values.controller.enabled -}}
 {{- fail "hibernation.enabled requires controller.enabled=true (the spawn hook creates and mounts the workspace PVCs)." -}}
@@ -230,6 +238,18 @@ Required calls are assigned so this helper emits no YAML.
 {{- end -}}
 
 {{/*
+Mount point of the per-Pod session-token Secret, and the file the worker reads
+with --auth-token-file.
+*/}}
+{{- define "cursor-worker-pool.tokenDir" -}}
+/var/run/cursor
+{{- end -}}
+
+{{- define "cursor-worker-pool.tokenFile" -}}
+{{- printf "%s/token" (include "cursor-worker-pool.tokenDir" .) -}}
+{{- end -}}
+
+{{/*
 Worker CLI arguments shared by the plain and hibernation Pod shapes.
 */}}
 {{- define "cursor-worker-pool.workerArgs" -}}
@@ -244,6 +264,10 @@ Worker CLI arguments shared by the plain and hibernation Pod shapes.
 {{- end }}
 - --management-addr
 - {{ .Values.managementAddr | quote }}
+{{- if .Values.auth.sessionToken }}
+- --auth-token-file
+- {{ include "cursor-worker-pool.tokenFile" . | quote }}
+{{- end }}
 {{- range .Values.labels }}
 - --label
 - {{ . | quote }}
@@ -284,9 +308,39 @@ spec:
 {{- end -}}
 
 {{/*
+Session-token Secret the spawn hook creates after the worker Pod, owned by that
+Pod so it is garbage-collected with it. The hook substitutes ${TOKEN_SECRET},
+${POD_NAME}, ${POD_UID}, and ${TOKEN_EXPIRES_AT} alongside the usual tokens,
+then appends stringData itself so the token never passes through sed or argv.
+*/}}
+{{- define "cursor-worker-pool.tokenSecret" -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: "${TOKEN_SECRET}"
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ include "cursor-worker-pool.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: worker-token
+    cursor.com/worker-id: "${WORKER_SLUG}"
+  annotations:
+    cursor.com/worker-id: "${WORKER_ID}"
+    cursor.com/pool: "${POOL}"
+    cursor.com/token-expires-at: "${TOKEN_EXPIRES_AT}"
+  ownerReferences:
+    - apiVersion: v1
+      kind: Pod
+      name: "${POD_NAME}"
+      uid: "${POD_UID}"
+type: Opaque
+{{- end -}}
+
+{{/*
 Pod manifest kubectl-created by the spawn hook. Column-0 YAML. The hook
-substitutes ${WORKER_SLUG}, ${WORKER_ID}, and ${POOL}. restartPolicy is Never
-so an idle-release exit is terminal.
+substitutes ${WORKER_SLUG}, ${WORKER_ID}, and ${POOL} (plus ${TOKEN_SECRET}
+with auth.sessionToken). restartPolicy is Never so an idle-release exit is
+terminal.
 */}}
 {{- define "cursor-worker-pool.workerPod" -}}
 apiVersion: v1
@@ -341,11 +395,13 @@ spec:
         {{- include "cursor-worker-pool.workerArgs" . | nindent 8 }}
       {{- end }}
       env:
+        {{- if not .Values.auth.sessionToken }}
         - name: CURSOR_API_KEY
           valueFrom:
             secretKeyRef:
               name: {{ include "cursor-worker-pool.secretName" . }}
               key: {{ .Values.auth.secretKey | quote }}
+        {{- end }}
         - name: CURSOR_POOL
           value: "${POOL}"
         - name: CURSOR_AGENT_WORKER_ID
@@ -379,8 +435,13 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if or .Values.hibernation.enabled .Values.extraVolumeMounts }}
+      {{- if or .Values.hibernation.enabled .Values.auth.sessionToken .Values.extraVolumeMounts }}
       volumeMounts:
+        {{- if .Values.auth.sessionToken }}
+        - name: cursor-auth-token
+          mountPath: {{ include "cursor-worker-pool.tokenDir" . | quote }}
+          readOnly: true
+        {{- end }}
         {{- if .Values.hibernation.enabled }}
         - name: workspace
           mountPath: {{ .Values.workerDir | quote }}
@@ -398,8 +459,17 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- end }}
-  {{- if or .Values.hibernation.enabled .Values.extraVolumes }}
+  {{- if or .Values.hibernation.enabled .Values.auth.sessionToken .Values.extraVolumes }}
   volumes:
+    {{- if .Values.auth.sessionToken }}
+    - name: cursor-auth-token
+      secret:
+        secretName: "${TOKEN_SECRET}"
+        defaultMode: 0444
+        items:
+          - key: token
+            path: token
+    {{- end }}
     {{- if .Values.hibernation.enabled }}
     - name: workspace
       persistentVolumeClaim:
