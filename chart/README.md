@@ -17,14 +17,17 @@ operator install. See
 |----------|------|-------------|
 | Deployment (1 replica) | `controller.enabled` | `agent worker controller --spawn …` (the controller process) |
 | ConfigMap | `controller.enabled` | Spawn hook plus the worker Pod manifest it `kubectl create`s (and, with hibernation, the PVC manifest and entrypoint) |
-| Role / RoleBinding | `controller.enabled` and `rbac.create` | Namespace permission to create/get/list Pods (plus create/get/list/patch PVCs with hibernation) |
+| Role / RoleBinding | `controller.enabled` and `rbac.create` | Namespace permission to create/get/list Pods (plus create/get/list/patch PVCs with hibernation, and create Secrets plus delete Pods with `auth.sessionToken`) |
 | ServiceAccount | `serviceAccount.create` | Controller SA; token automount on (required for kubectl) |
 | Secret | `auth.apiKey` set and `auth.existingSecret` empty | Holds `CURSOR_API_KEY` |
 | CronJob + ConfigMap + ServiceAccount + Role + RoleBinding (`*-reaper`) | `hibernation.enabled` and `hibernation.reaper.enabled` | Deletes stale workspace PVCs and finished worker Pods |
 
 Worker **instances** are outside the Helm release. Each `--spawn` creates a Pod
-named `<worker-id>-<suffix>` with `restartPolicy: Never`. Workers authenticate
-with a team **service account API key** (`CURSOR_API_KEY`). With
+named `<worker-id>-<suffix>` with `restartPolicy: Never`. By default workers
+authenticate with the team **service account API key** (`CURSOR_API_KEY`).
+With [session tokens](#session-tokens-opt-in) on, only the controller holds
+that key, and each worker Pod reads a token for its own claim from a Secret
+`tok-<worker-id>-<suffix>` that the Pod owns. With
 [hibernation](#hibernation-opt-in) on, each worker id also owns a
 PersistentVolumeClaim `ws-<worker-id>` that the hook creates on first use.
 
@@ -44,7 +47,7 @@ The controller container additionally needs `kubectl`.
 
 The chart is published to Amazon ECR Public at
 `oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers`, and installing it needs no
-registry login. Replace `0.2.1` below with the version you want from the
+registry login. Replace `0.3.0` below with the version you want from the
 [releases page](https://github.com/anysphere/k8s-workers/releases).
 
 ### Existing Secret
@@ -55,7 +58,7 @@ kubectl create secret generic cursor-workers-api-key \
   -n cursord
 
 helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.1 \
+  --version 0.3.0 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -68,7 +71,7 @@ helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-worke
 
 ```bash
 helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.1 \
+  --version 0.3.0 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -82,7 +85,7 @@ Render without installing:
 
 ```bash
 helm template my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.1 \
+  --version 0.3.0 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=sample \
   --set auth.existingSecret=cursor-workers-api-key
@@ -102,7 +105,9 @@ runs `kubectl create -f -` with a Pod spec:
    one. The worker receives `CURSOR_AGENT_WORKER_ID` exactly as the controller
    claimed or generated it; `CURSOR_WORKER_NAME` is the Pod name.
 3. `CURSOR_API_KEY` is mounted from the same Secret; the worker Pod uses that
-   key rather than the controller ServiceAccount token.
+   key rather than the controller ServiceAccount token. With
+   `auth.sessionToken=true` the Pod gets no key; it reads a per-claim token
+   from `/var/run/cursor/token` (see [Session tokens](#session-tokens-opt-in)).
 4. `agent worker start` mints a session at the CLI auth default
    (`https://api2.cursor.sh`). The controller default (`https://api.cursor.com`)
    is for `/v0/private-workers`. Set `controller.endpoint` to override the
@@ -110,7 +115,9 @@ runs `kubectl create -f -` with a Pod spec:
 
 The hook substitutes exactly three tokens (`${WORKER_SLUG}`, `${WORKER_ID}`,
 `${POOL}`) into the manifests with `sed`, after validating each to a safe
-character set. Any other `$` in your `command` or `extraArgs` is passed
+character set. With `auth.sessionToken` it also substitutes `${TOKEN_SECRET}`,
+`${POD_NAME}`, `${POD_UID}`, and `${TOKEN_EXPIRES_AT}`; the token itself never
+goes through `sed`. Any other `$` in your `command` or `extraArgs` is passed
 through untouched.
 
 ### Claim-then-spawn (`controller.warmIdle=0`, default)
@@ -131,13 +138,63 @@ Run one warm controller per pool. Two concurrent warm controllers can
 transiently over-spawn. This chart uses `strategy: Recreate` on the controller
 Deployment so a rollout keeps a single controller.
 
-Succeeded/Failed worker Pods stay until you delete them (or until the
-hibernation reaper does):
+Succeeded/Failed worker Pods (and, with session tokens, the token Secrets they
+own) stay until you delete them (or until the hibernation reaper does):
 
 ```bash
 kubectl -n cursord delete pod -l app.kubernetes.io/component=worker \
   --field-selector=status.phase=Succeeded
 ```
+
+## Session tokens (opt-in)
+
+Off by default (`auth.sessionToken=false`): every worker Pod gets the service
+account key as `CURSOR_API_KEY`, in the environment where the agent runs
+commands.
+
+On, the key stays in the controller Pod:
+
+1. The controller runs `agent worker controller --session-token`. A claim
+   returns a token that serves only that claim, and a wake mints a fresh one
+   for the same claim (`POST /v0/private-workers/tokens`). The spawn hook gets
+   it as `CURSOR_AUTH_TOKEN` (plus `CURSOR_AUTH_TOKEN_EXPIRES_AT`) and never
+   sees `CURSOR_API_KEY`.
+2. The hook creates the worker Pod, then a Secret `tok-<worker-id>-<suffix>`
+   holding the token, with an `ownerReference` to that Pod, so Kubernetes
+   deletes the Secret with the Pod. If the Secret cannot be created, the hook
+   deletes the Pod and exits 1.
+3. The Pod mounts the Secret read-only at `/var/run/cursor` and runs
+   `agent worker … --auth-token-file /var/run/cursor/token start`. The kubelet
+   starts the container only once the Secret exists.
+
+| | `auth.sessionToken=false` | `auth.sessionToken=true` |
+| --- | --- | --- |
+| Controller Pod | `CURSOR_API_KEY` | `CURSOR_API_KEY`, `--session-token` |
+| Worker Pod | `CURSOR_API_KEY` in its environment | Token for its own claim in `/var/run/cursor/token`; no key |
+| Controller Role | Pods: create, get, list | Adds Pods: delete; Secrets: create |
+| `controller.warmIdle` | Any | Must be `0` |
+
+Constraints:
+
+- Claim mode only. Warm workers start before any claim, so there is no token
+  to give them: the CLI rejects `--session-token` with `--warm-idle`, and the
+  chart fails the render when `controller.warmIdle > 0`.
+- The team needs private-worker session tokens enabled. Without them the
+  controller exits with `--session-token needs private-worker session tokens
+  enabled for this team`; it does not fall back to handing out the key.
+- The controller image needs a CLI with `agent worker controller
+  --session-token` (`2026.10.01-e373342` has it).
+- Secrets are create-only for the controller: it cannot read, change, or
+  delete any Secret, including the one holding the key. With
+  `rbac.create=false`, grant `create` on `secrets` and `delete` on `pods`
+  yourself.
+- Nothing refreshes a running worker's token. The worker re-reads the file
+  before reconnecting, and a wake gets a new Pod with a new token. The
+  token's expiry is on its Secret as `cursor.com/token-expires-at`.
+- A finished Pod keeps its Secret until the Pod is deleted. The hibernation
+  reaper deletes finished Pods after `hibernation.podTtl`; otherwise delete
+  them as shown above.
+- The hook reads `/proc/sys/kernel/random/uuid` for the Secret name suffix.
 
 ## Hibernation (opt-in)
 
@@ -177,7 +234,7 @@ its NOTES. Walkthrough, sizing, and caveats: root
 |-------------------------------|----------|
 | `readyReplicas` = idle workers; claimed `/readyz` 503 triggers replacements | `--warm-idle` (optional) or claim-then-spawn; each worker is a Pod created by `--spawn` |
 | Busy-safe rolling updates (drain idle, wait for busy) | Controller uses Recreate; worker Pods are one-shot |
-| Operator token exchange + `--auth-token-file` rotation | Long-lived `CURSOR_API_KEY` from a Secret, set in each worker Pod's environment |
+| Operator token exchange + `--auth-token-file` rotation | Default: long-lived `CURSOR_API_KEY` from a Secret, set in each worker Pod's environment. With `auth.sessionToken`: a per-claim token read with `--auth-token-file`, and only the controller holds the key |
 | `WorkerDeployment` + `worker-set-controller` | Vanilla Pods via `--spawn` |
 | Optional demand autoscaling / scale-to-zero | Claim-then-spawn if `warmIdle=0`; otherwise a fixed idle target via `--warm-idle` |
 | Two controller replicas with leader election | One controller replica; nothing claims or spawns while it restarts |
@@ -198,12 +255,13 @@ its NOTES. Walkthrough, sizing, and caveats: root
 | `auth.existingSecret` | `""` | Existing Secret name |
 | `auth.secretKey` | `api-key` | Key inside the Secret |
 | `auth.apiKey` | `""` | Create a Secret from this value when `existingSecret` is empty |
+| `auth.sessionToken` | `false` | Keep the key in the controller Pod; worker Pods read a per-claim token with `--auth-token-file`. Requires `controller.warmIdle=0`. See [Session tokens](#session-tokens-opt-in) |
 | `controller.enabled` | `true` | Deploy the in-cluster controller |
 | `controller.warmIdle` | `0` | `0` omits `--warm-idle` (claim mode). A positive integer is passed through as `--warm-idle` |
 | `controller.repository` | `""` | Optional `--repository` on the controller |
 | `controller.endpoint` | `""` | Optional controller `CURSOR_API_ENDPOINT` override |
 | `controller.image.*` | empty | Optional controller image (`agent` + `kubectl`) |
-| `rbac.create` | `true` | Role/RoleBinding for Pod create |
+| `rbac.create` | `true` | Role/RoleBinding for Pod create (plus PVCs with hibernation, Secret create and Pod delete with `auth.sessionToken`) |
 | `resources` | 250m / 512Mi request, 2Gi memory limit | Spawned **worker** Pod resources |
 | `podSecurityContext` | `{}` | Pod `securityContext`. Set `fsGroup` to the image user's gid when hibernation mounts a volume and that user is not root |
 | `probes.readiness.path` | `/readyz` | Readiness HTTP path on worker Pods |

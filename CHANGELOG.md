@@ -3,6 +3,35 @@
 Each release is a git tag named `v<version>`. While the chart is 0.x, a minor
 release can need action from you, and its entry says what.
 
+## 0.3.0
+
+Opt-in session tokens with `auth.sessionToken` (default `false`), so worker
+Pods no longer have to hold the long-lived service account key. With it on:
+
+- The controller runs `agent worker controller --session-token` and is the
+  only Pod with `CURSOR_API_KEY`.
+- For each claim (and each wake), the spawn hook creates the worker Pod and
+  then a Secret `tok-<worker-id>-<suffix>` owned by that Pod, holding a token
+  that serves only that claim. Kubernetes deletes the Secret with the Pod.
+- Worker Pods mount that Secret at `/var/run/cursor` and start with
+  `--auth-token-file /var/run/cursor/token`. They get no `CURSOR_API_KEY`.
+- The controller Role gains `create` on Secrets (no read, update, or delete)
+  and `delete` on Pods, used only to remove a Pod whose Secret could not be
+  created.
+
+It works in claim mode only: `controller.warmIdle` must stay `0`, and the
+chart fails the render otherwise.
+
+Action needed only if you set `controller.extraArgs` to include
+`--session-token` while `auth.sessionToken` is off: that left
+`CURSOR_API_KEY` in every worker Pod, and the chart now refuses to render it.
+Remove the flag from `controller.extraArgs` and set `auth.sessionToken=true`.
+
+With `auth.sessionToken` off, the chart renders the same resources as 0.2.1
+apart from the version labels and one comment in the spawn hook. As in
+earlier releases, the upgrade restarts the controller Pod once; running worker
+Pods keep running.
+
 ## 0.2.1
 
 The first release you can install from a public registry, with no login:

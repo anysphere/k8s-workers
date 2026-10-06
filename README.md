@@ -33,7 +33,7 @@ lists what changes when you move over.
 | Controller + spawn | One controller process; workers are kubectl-created Pods |
 | One-shot Pods | `restartPolicy: Never` — idle exit completes the Pod; next spawn creates a new one |
 | Claim or warm | `controller.warmIdle=0` claim-then-spawn, or `>0` for `--warm-idle N` |
-| Service account key | Long-lived `CURSOR_API_KEY` from a Secret |
+| Worker auth | Long-lived `CURSOR_API_KEY` from a Secret in every worker Pod by default. With `auth.sessionToken=true`, only the controller holds the key and each worker gets a token for its own claim. See [Session tokens](#session-tokens-opt-in) |
 | No CRD | Installs no CRD or `WorkerDeployment`, so it can share a cluster with an existing operator install |
 | Hibernation | **Off by default.** Opt in with `hibernation.enabled=true` plus a pool reconnect window to keep a per-worker workspace volume across idle exits. See [Hibernation](#hibernation-opt-in) |
 
@@ -193,7 +193,7 @@ controller Deployment so a rollout keeps a single controller.
 
 The chart is published to Amazon ECR Public at
 `oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers`, and installing it needs no
-registry login. These steps pin `0.2.1`; replace it with the newest version on
+registry login. These steps pin `0.3.0`; replace it with the newest version on
 the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
 1. Create a namespace and store the service account API key.
@@ -210,7 +210,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.1 \
+     --version 0.3.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -219,11 +219,15 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
      --set auth.existingSecret=cursor-workers-api-key
    ```
 
+   To keep the service account key out of worker Pods, add
+   `--set auth.sessionToken=true` (claim mode only; see
+   [Session tokens](#session-tokens-opt-in)).
+
    For a warm pool of three idle workers instead:
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.1 \
+     --version 0.3.0 \
      --namespace cursord \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -237,7 +241,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.1 \
+     --version 0.3.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -256,14 +260,14 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
    (see [Run a cloud agent](#run-a-cloud-agent) below).
 
 To change the spawn hook or templates, clone the repository at the release tag
-(`git clone --branch v0.2.1 https://github.com/anysphere/k8s-workers.git`) and
+(`git clone --branch v0.3.0 https://github.com/anysphere/k8s-workers.git`) and
 install `./chart` in place of the OCI reference.
 
 Render without installing:
 
 ```bash
 helm template my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.1 \
+  --version 0.3.0 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key
@@ -327,6 +331,80 @@ For a first walkthrough without private git auth, bake
 `https://github.com/octocat/Hello-World` into the image workspace, then
 replace it with your real repository before production work.
 
+## Session tokens (opt-in)
+
+By default every worker Pod gets the team service account key as
+`CURSOR_API_KEY`, in the same environment where the agent runs commands. The
+deprecated operator kept the key out of worker Pods by exchanging it for
+short-lived tokens that workers read with `--auth-token-file`.
+`auth.sessionToken=true` does the same with this chart:
+
+- The controller Pod is the only Pod with the service account key. It runs
+  `agent worker controller --session-token`, so each claim comes with a token
+  that serves only that claim, and a wake mints a fresh one for the same
+  claim.
+- The spawn hook writes that token to a Secret `tok-<worker-id>-<suffix>`
+  owned by the worker Pod, so Kubernetes deletes it with the Pod.
+- The worker Pod mounts it at `/var/run/cursor/token` and starts with
+  `--auth-token-file`. It has no `CURSOR_API_KEY`.
+
+It works in claim mode only: `controller.warmIdle` must be `0` (the default).
+A warm worker starts before anything is claimed, so there is no claim token to
+give it, and the chart fails the render if you combine the two.
+
+### Turn it on
+
+1. Use a controller image whose `agent` CLI has
+   `agent worker controller --session-token` (`2026.10.01-e373342` has it).
+   Private-worker session tokens must be enabled for the team; if they are
+   not, the controller exits with an error instead of falling back to the key.
+
+2. Install or upgrade with the option on:
+
+   ```bash
+   helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
+     --version 0.3.0 \
+     --namespace cursord --create-namespace \
+     --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
+     --set image.tag=YOUR_TAG \
+     --set pool=k8s-workers \
+     --set controller.warmIdle=0 \
+     --set auth.existingSecret=cursor-workers-api-key \
+     --set auth.sessionToken=true
+   ```
+
+3. Check it. Start an agent against the pool, then confirm that no worker Pod
+   lists `CURSOR_API_KEY` and that each one owns a token Secret:
+
+   ```bash
+   kubectl -n cursord get pods -l app.kubernetes.io/component=worker \
+     -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.containers[0].env[*].name}{"\n"}{end}'
+   kubectl -n cursord get secrets -l app.kubernetes.io/component=worker-token \
+     -o custom-columns='NAME:.metadata.name,POD:.metadata.ownerReferences[0].name,EXPIRES:.metadata.annotations.cursor\.com/token-expires-at'
+   ```
+
+### Moving from the operator
+
+The operator's `--auth-token-file` setup maps to `auth.sessionToken=true` with
+`controller.warmIdle=0`. You do not need to patch the worker Pod template or
+add `--session-token` to `controller.extraArgs`. With `auth.sessionToken` off,
+the chart refuses `--session-token` in `controller.extraArgs`, because the
+flag on its own still leaves the key in every worker Pod.
+
+### What changes
+
+- The controller Role gains `create` on Secrets and `delete` on Pods. The
+  controller cannot read, update, or delete any Secret, including the one
+  that holds the key, and it deletes a Pod only when that Pod's token Secret
+  could not be created. With `rbac.create=false`, grant both yourself.
+- Nothing refreshes a running worker's token. The worker re-reads the file
+  before it reconnects, and a wake gets a new Pod with a new token.
+- A finished worker Pod keeps its token Secret until the Pod is deleted. The
+  hibernation reaper deletes finished Pods after `hibernation.podTtl`;
+  otherwise delete them as shown in [Monitoring](#monitoring).
+- It combines with [hibernation](#hibernation-opt-in): each wake mounts the
+  same workspace claim into a new Pod with a new token Secret.
+
 ## Hibernation (opt-in)
 
 By default a worker Pod is one-shot: it exits after `idleReleaseTimeout`,
@@ -383,7 +461,7 @@ Cursor-managed hibernation snapshots memory; this does not.
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.1 \
+     --version 0.3.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -533,6 +611,10 @@ chmod +x hooks/spawn-pod.sh
 agent worker controller --spawn ./hooks/spawn-pod.sh --pool default
 ```
 
+If the release has `auth.sessionToken=true`, add `--session-token`; that hook
+exits 1 without `CURSOR_AUTH_TOKEN`, and your `kubectl` context also needs
+`create` on Secrets.
+
 The in-cluster install remains the supported long-running path.
 
 ## Monitoring
@@ -548,6 +630,9 @@ kubectl -n cursord get pods -l app.kubernetes.io/component=worker
 # reaper does this for you when that feature is on)
 kubectl -n cursord delete pod -l app.kubernetes.io/component=worker \
   --field-selector=status.phase=Succeeded
+
+# Session tokens only: one Secret per worker Pod, deleted with its Pod
+kubectl -n cursord get secrets -l app.kubernetes.io/component=worker-token
 
 # Hibernation only: workspace claims and their last use
 kubectl -n cursord get pvc -l app.kubernetes.io/component=workspace \
@@ -589,13 +674,19 @@ Only worker Pods serve these endpoints.
 | Reaper Job `Error`, `kubectl: not found` | The reaper does not run `command`. `hibernation.reaper.image` (the controller image when empty) must have `kubectl` on `PATH`, or set `hibernation.reaper.enabled=false`. |
 | `ws-*` claim stuck `Terminating` | A `Succeeded`/`Failed` Pod still references it (`kubernetes.io/pvc-protection`). Delete those Pods; the reaper does this before deleting a claim |
 | Worker Pod fails at start with hibernation on | Worker image lacks `/bin/sh`; `seed.fromPath` missing in the image; `seed.cloneUrl` needs `git` and credentials |
+| Controller exits: `--session-token needs private-worker session tokens enabled for this team` | Session tokens are not enabled for the team. Ask Cursor to enable them, or set `auth.sessionToken=false` |
+| Render fails: `auth.sessionToken requires controller.warmIdle=0` | Session tokens are claim mode only. Set `controller.warmIdle=0`, or turn `auth.sessionToken` off for a warm pool |
+| Hook logs `CURSOR_AUTH_TOKEN is required with auth.sessionToken` | The controller is not running with `--session-token`: an older CLI, or a custom controller command |
+| Hook logs `creating Secret tok-… failed; deleting Pod …` | The controller cannot create Secrets (`rbac.create=false` without that grant, or a ResourceQuota on Secrets) |
+| Worker Pod stuck `ContainerCreating`, `secret "tok-…" not found` | The hook stopped between creating the Pod and its Secret. Delete the Pod and check the controller logs |
+| Worker exits: `Your authentication token file is missing or invalid` or `session token expired` | The worker's claim token expired before it reconnected. Nothing refreshes a running worker's token; the next claim or wake gets a new one |
 
 ## Differences from the deprecated operator
 
 | Operator (`WorkerDeployment`) | This chart |
 | --- | --- |
 | `readyReplicas` = idle workers; busy-safe rolling updates | `--warm-idle` or claim-then-spawn; one-shot Pods |
-| Operator exchanges the API key for short-lived tokens that workers read with `--auth-token-file` | Each worker Pod gets the long-lived service account key as `CURSOR_API_KEY`, in the environment where the agent runs commands |
+| Operator exchanges the API key for short-lived tokens that workers read with `--auth-token-file` | By default each worker Pod gets the long-lived service account key as `CURSOR_API_KEY`, in the environment where the agent runs commands. With `auth.sessionToken=true` (claim mode), workers read a per-claim token with `--auth-token-file` and only the controller holds the key. See [Session tokens](#session-tokens-opt-in) |
 | `WorkerDeployment` + `worker-set-controller` | Vanilla Pods via `--spawn` |
 | Optional demand autoscaling / scale-to-zero | Claim-then-spawn (`warmIdle=0`) or fixed idle via `--warm-idle` |
 | Two controller replicas with leader election | One controller replica; nothing claims or spawns while it restarts, and connected workers keep running |
