@@ -290,6 +290,39 @@ file_lacks "${SPAWNED}" "persistentVolumeClaim"
 file_lacks "${SPAWNED}" "entrypoint.sh"
 [ ! -e "${WORKDIR}/off-nowake/annotate.log" ] || { echo "off mode must not annotate" >&2; exit 1; }
 
+# Worker identity is independent of the controller ServiceAccount. Defaults
+# keep the namespace's default account without mounting its API token.
+file_lacks "${SPAWNED}" "serviceAccountName:"
+file_contains "${SPAWNED}" "automountServiceAccountToken: false"
+for worker_account in "" cloud-worker; do
+  for automount in false true; do
+    case_dir="${WORKDIR}/worker-account-${worker_account:-default}-${automount}"
+    mkdir -p "${case_dir}"
+    helm template test-release "${CHART}" \
+      --set image.repository=example.local/cursor-worker \
+      --set image.tag=test \
+      --set auth.existingSecret=cursor-workers-api-key \
+      --set serviceAccount.name=controller-account \
+      --set workerServiceAccount.name="${worker_account}" \
+      --set workerServiceAccount.automount="${automount}" \
+      >"${case_dir}/render.yaml"
+    extract_hooks "${case_dir}/render.yaml" "${case_dir}/hooks"
+    run_hook "worker service account" "${case_dir}/hooks" "${case_dir}/spawn"
+    pod="${case_dir}/spawn/created-1.yaml"
+    file_contains "${pod}" "automountServiceAccountToken: ${automount}"
+    if [ -n "${worker_account}" ]; then
+      file_contains "${pod}" "serviceAccountName: \"${worker_account}\""
+    else
+      file_lacks "${pod}" "serviceAccountName:"
+    fi
+    file_lacks "${pod}" "controller-account"
+    # These fields occur only in the controller Deployment outside the
+    # indented ConfigMap payload.
+    file_contains "${case_dir}/render.yaml" "      serviceAccountName: controller-account"
+    file_contains "${case_dir}/render.yaml" "      automountServiceAccountToken: true"
+  done
+done
+
 # Hibernation off, wake: a fresh Pod with the claimed id and no volume.
 run_hook "off/wake" "${WORKDIR}/hooks-off" "${WORKDIR}/off-wake" CURSOR_WAKE=1
 [ "$(created_count "${WORKDIR}/off-wake")" = "1" ] || { echo "off/wake must create exactly one object" >&2; exit 1; }
