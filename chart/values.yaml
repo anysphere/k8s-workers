@@ -151,6 +151,12 @@ serviceAccount:
   # token to create worker Pods.
   automount: true
 
+# Existing ServiceAccount for spawned worker Pods, separate from the controller.
+# Empty name uses the namespace's default account. No worker account is created.
+workerServiceAccount:
+  name: ""
+  automount: false
+
 # Resource requests/limits applied to spawned worker Pods (not the controller).
 resources:
   requests:

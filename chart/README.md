@@ -146,6 +146,16 @@ kubectl -n cursord delete pod -l app.kubernetes.io/component=worker \
   --field-selector=status.phase=Succeeded
 ```
 
+## Worker ServiceAccount
+
+Workers use the namespace's default Kubernetes ServiceAccount with API token
+mounting disabled. To use an existing account configured for cloud workload
+identity, set `workerServiceAccount.name` to its name in the release namespace.
+Set `workerServiceAccount.automount=true` only if workers need the Kubernetes
+API token. These settings do not change Cursor authentication or the controller's
+`serviceAccount` settings, and the chart does not create the worker account or
+grant it permissions.
+
 ## Session tokens (opt-in)
 
 Off by default (`auth.sessionToken=false`): every worker Pod gets the service
@@ -262,6 +272,8 @@ its NOTES. Walkthrough, sizing, and caveats: root
 | `controller.endpoint` | `""` | Optional controller `CURSOR_API_ENDPOINT` override |
 | `controller.image.*` | empty | Optional controller image (`agent` + `kubectl`) |
 | `rbac.create` | `true` | Role/RoleBinding for Pod create (plus PVCs with hibernation, Secret create and Pod delete with `auth.sessionToken`) |
+| `workerServiceAccount.name` | `""` | Existing worker ServiceAccount in the release namespace; empty uses the namespace default |
+| `workerServiceAccount.automount` | `false` | Mount the Kubernetes API token in worker Pods |
 | `resources` | 250m / 512Mi request, 2Gi memory limit | Spawned **worker** Pod resources |
 | `podSecurityContext` | `{}` | Pod `securityContext`. Set `fsGroup` to the image user's gid when hibernation mounts a volume and that user is not root |
 | `probes.readiness.path` | `/readyz` | Readiness HTTP path on worker Pods |

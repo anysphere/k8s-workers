@@ -3,6 +3,13 @@
 Each release is a git tag named `v<version>`. While the chart is 0.x, a minor
 release can need action from you, and its entry says what.
 
+## 0.2.3
+
+Workers can use an existing Kubernetes ServiceAccount via
+`workerServiceAccount.name` and opt in to API token mounting with
+`workerServiceAccount.automount`. The controller's account is unchanged.
+Defaults preserve the existing worker Pod behavior; no upgrade action is needed.
+
 ## 0.2.2
 
 Opt-in session tokens with `auth.sessionToken` (default `false`), so worker

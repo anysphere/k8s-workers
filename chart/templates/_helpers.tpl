@@ -364,7 +364,10 @@ metadata:
     {{- end }}
 spec:
   restartPolicy: Never
-  automountServiceAccountToken: false
+  automountServiceAccountToken: {{ .Values.workerServiceAccount.automount }}
+  {{- with .Values.workerServiceAccount.name }}
+  serviceAccountName: {{ . | quote }}
+  {{- end }}
   terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
   {{- with .Values.priorityClassName }}
   priorityClassName: {{ . | quote }}
