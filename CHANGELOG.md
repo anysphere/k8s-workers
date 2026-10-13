@@ -3,6 +3,28 @@
 Each release is a git tag named `v<version>`. While the chart is 0.x, a minor
 release can need action from you, and its entry says what.
 
+## 0.2.4
+
+Opt-in claim identity tokens with `identity.audience` (default empty). Set it
+and the controller runs `agent worker controller --identity-audience
+<audience>`, so each claim returns a short-lived signed token naming the user,
+team, agent and worker. The spawn hook receives it as `CURSOR_IDENTITY_TOKEN`,
+with `CURSOR_IDENTITY_TOKEN_EXPIRES_AT` and `CURSOR_IDENTITY_NONCE`:
+
+- The default hook does not use the token. It unsets all three before it runs
+  `kubectl`, and never writes them to argv, output, Pod env, annotations or
+  Secrets.
+- A custom hook can verify the token before it creates anything. See
+  [Identity tokens](README.md#identity-tokens-opt-in).
+- Claim mode only: the chart fails the render with `controller.warmIdle > 0`
+  or `hibernation.enabled`, because warm workers and wakes get no claim token.
+- Needs a controller CLI with `--identity-audience` (version TBD).
+
+With `identity.audience` empty, the chart renders the same resources as 0.2.2
+apart from the version labels, so the upgrade needs no action. As in earlier
+releases, it restarts the controller Pod once; running worker Pods keep
+running.
+
 ## 0.2.2
 
 Opt-in session tokens with `auth.sessionToken` (default `false`), so worker

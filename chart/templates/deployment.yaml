@@ -64,6 +64,10 @@ spec:
             {{- if .Values.auth.sessionToken }}
             - --session-token
             {{- end }}
+            {{- with .Values.identity.audience }}
+            - --identity-audience
+            - {{ . | quote }}
+            {{- end }}
             {{- range .Values.controller.extraArgs }}
             - {{ . | quote }}
             {{- end }}

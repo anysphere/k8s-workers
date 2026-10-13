@@ -173,7 +173,8 @@ PY
 # rejected (saved as rejected-secret.yaml) when MOCK_FAIL_SECRET is set.
 # `get pvc` answers from MOCK_PVC_STATE: empty means NotFound, otherwise the
 # jsonpath the hook asks for ("Bound/" bound, "Bound/<ts>" terminating).
-# `annotate` is recorded in annotate.log and `delete` in delete.log.
+# `annotate` is recorded in annotate.log and `delete` in delete.log. Each
+# call's environment is appended to env.log.
 MOCK_POD_UID="0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
 cat >"${WORKDIR}/kubectl" <<EOF
 #!/bin/sh
@@ -181,6 +182,7 @@ MOCK_POD_UID="${MOCK_POD_UID}"
 EOF
 cat >>"${WORKDIR}/kubectl" <<'EOF'
 echo "$*" >>"${MOCK_DIR}/argv.log"
+env >>"${MOCK_DIR}/env.log"
 case "$1" in
   create)
     n=$(ls "${MOCK_DIR}" | grep -c '^created-' || true)
@@ -621,6 +623,87 @@ run_hook "session+hibernation/wake" "${WORKDIR}/hooks-session-hib" "${WORKDIR}/s
 expect_hook_fail "session+hibernation/wake/missing" "${WORKDIR}/hooks-session-hib" "${WORKDIR}/session-hib-wake-missing" 3 \
   CURSOR_WAKE=1 CURSOR_AUTH_TOKEN="${TOKEN}"
 
+# ---------------------------------------------------------------------------
+# Identity token. Off (the default) passes no flag and leaves the hook as is.
+must_not_contain "--identity-audience"
+file_lacks "${WORKDIR}/hooks-off/spawn-pod.sh" "CURSOR_IDENTITY"
+
+expect_fail "identity.audience with warmIdle" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set identity.audience=https://sandbox.example.com --set controller.warmIdle=2
+expect_fail "identity.audience with hibernation" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set identity.audience=https://sandbox.example.com --set hibernation.enabled=true
+expect_fail "identity.audience without controller" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set identity.audience=https://sandbox.example.com --set controller.enabled=false
+
+IDENTITY_RENDER="${WORKDIR}/identity.yaml"
+helm template test-release "${CHART}" \
+  --namespace cursord \
+  --set image.repository=example.local/cursor-worker \
+  --set image.tag=test \
+  --set pool=gpu \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set identity.audience=https://sandbox.example.com \
+  >"${IDENTITY_RENDER}"
+grep -x -A1 -F -- "            - --identity-audience" "${IDENTITY_RENDER}" \
+  | grep -x -F -- '            - "https://sandbox.example.com"' >/dev/null \
+  || { echo "identity.audience must render --identity-audience <value> on the controller" >&2; exit 1; }
+file_lacks "${IDENTITY_RENDER}" '"secrets"'
+file_lacks "${IDENTITY_RENDER}" "kind: Secret"
+
+extract_hooks "${IDENTITY_RENDER}" "${WORKDIR}/hooks-identity"
+sh -n "${WORKDIR}/hooks-identity/spawn-pod.sh"
+file_lacks "${WORKDIR}/hooks-identity/worker-pod.yaml" "CURSOR_IDENTITY"
+
+ID_TOKEN="eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.identity-not-a-real-signature"
+ID_EXPIRES="2026-10-13T23:59:00.000Z"
+ID_NONCE="identity-nonce-5c0ffee"
+# The token and its companions reach nothing the hook creates or runs: not
+# kubectl's argv or environment, not the hook's output, not any manifest.
+id_secrets_absent() { # mock_dir
+  local f
+  for f in "$1"/argv.log "$1"/env.log "$1"/hook.out "$1"/created-*.yaml; do
+    file_lacks "${f}" "${ID_TOKEN}"
+    file_lacks "${f}" "${ID_NONCE}"
+    file_lacks "${f}" "${ID_EXPIRES}"
+  done
+}
+
+run_hook "identity/claim" "${WORKDIR}/hooks-identity" "${WORKDIR}/identity-claim" \
+  CURSOR_IDENTITY_TOKEN="${ID_TOKEN}" CURSOR_IDENTITY_TOKEN_EXPIRES_AT="${ID_EXPIRES}" \
+  CURSOR_IDENTITY_NONCE="${ID_NONCE}"
+[ "$(created_count "${WORKDIR}/identity-claim")" = "1" ] || { echo "identity/claim must create only the Pod" >&2; exit 1; }
+file_contains "${WORKDIR}/identity-claim/created-1.yaml" "kind: Pod"
+id_secrets_absent "${WORKDIR}/identity-claim"
+
+# A wake carries no identity token; the default hook spawns as usual.
+run_hook "identity/wake" "${WORKDIR}/hooks-identity" "${WORKDIR}/identity-wake" CURSOR_WAKE=1
+[ "$(created_count "${WORKDIR}/identity-wake")" = "1" ] || { echo "identity/wake must create only the Pod" >&2; exit 1; }
+
+# With session tokens too, only the session token goes into the Pod's Secret.
+helm template test-release "${CHART}" \
+  --namespace cursord \
+  --set image.repository=example.local/cursor-worker \
+  --set image.tag=test \
+  --set pool=gpu \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set auth.sessionToken=true \
+  --set identity.audience=https://sandbox.example.com \
+  >"${WORKDIR}/identity-session.yaml"
+extract_hooks "${WORKDIR}/identity-session.yaml" "${WORKDIR}/hooks-identity-session"
+run_hook "identity+session/claim" "${WORKDIR}/hooks-identity-session" "${WORKDIR}/identity-session-claim" \
+  CURSOR_AUTH_TOKEN="${TOKEN}" CURSOR_AUTH_TOKEN_EXPIRES_AT="${EXPIRES}" \
+  CURSOR_IDENTITY_TOKEN="${ID_TOKEN}" CURSOR_IDENTITY_TOKEN_EXPIRES_AT="${ID_EXPIRES}" \
+  CURSOR_IDENTITY_NONCE="${ID_NONCE}"
+[ "$(created_count "${WORKDIR}/identity-session-claim")" = "2" ] || { echo "identity+session must create the Pod then its Secret" >&2; exit 1; }
+file_contains "${WORKDIR}/identity-session-claim/created-2.yaml" "token: \"${TOKEN}\""
+id_secrets_absent "${WORKDIR}/identity-session-claim"
+
 # Controller enabled is the default; an explicit true must still render.
 helm template test-release "${CHART}" \
   --set image.repository=example.local/cursor-worker \
@@ -688,6 +771,7 @@ if command -v kubeconform >/dev/null 2>&1; then
   kubeconform -strict -ignore-missing-schemas -summary "${SESSION_SECRET}"
   kubeconform -strict -ignore-missing-schemas -summary "${SESSION_HIB_RENDER}"
   kubeconform -strict -ignore-missing-schemas -summary "${SESSION_HIB_POD}"
+  kubeconform -strict -ignore-missing-schemas -summary "${IDENTITY_RENDER}"
 fi
 
 echo "helm-validate: ok"

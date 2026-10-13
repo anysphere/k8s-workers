@@ -64,6 +64,15 @@ data:
       echo "spawn-pod: could not derive a DNS-1123 name from CURSOR_AGENT_WORKER_ID" >&2
       exit 1
     fi
+    {{- if .Values.identity.audience }}
+
+    # identity.audience: the controller passes this claim's signed identity
+    # token as CURSOR_IDENTITY_TOKEN, plus CURSOR_IDENTITY_TOKEN_EXPIRES_AT and
+    # CURSOR_IDENTITY_NONCE. A wake has none. This hook does not use them; a
+    # custom hook verifies the token here, before it creates anything. Unset
+    # so kubectl and anything it runs never inherit the token.
+    unset CURSOR_IDENTITY_TOKEN CURSOR_IDENTITY_TOKEN_EXPIRES_AT CURSOR_IDENTITY_NONCE
+    {{- end }}
     {{- if .Values.auth.sessionToken }}
 
     # auth.sessionToken: the controller runs with --session-token and passes a
