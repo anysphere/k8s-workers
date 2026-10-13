@@ -47,7 +47,7 @@ The controller container additionally needs `kubectl`.
 
 The chart is published to Amazon ECR Public at
 `oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers`, and installing it needs no
-registry login. Replace `0.2.2` below with the version you want from the
+registry login. Replace `0.2.4` below with the version you want from the
 [releases page](https://github.com/anysphere/k8s-workers/releases).
 
 ### Existing Secret
@@ -58,7 +58,7 @@ kubectl create secret generic cursor-workers-api-key \
   -n cursord
 
 helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.2 \
+  --version 0.2.4 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -71,7 +71,7 @@ helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-worke
 
 ```bash
 helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.2 \
+  --version 0.2.4 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -85,7 +85,7 @@ Render without installing:
 
 ```bash
 helm template my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.2 \
+  --version 0.2.4 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=sample \
   --set auth.existingSecret=cursor-workers-api-key
@@ -196,6 +196,28 @@ Constraints:
   them as shown above.
 - The hook reads `/proc/sys/kernel/random/uuid` for the Secret name suffix.
 
+## Identity tokens (opt-in)
+
+Off by default (`identity.audience=""`). Set an audience and the controller
+runs `agent worker controller --identity-audience <audience>`; each claim then
+returns a 5-minute signed token naming the user, team, agent and worker. The
+spawn hook receives it as `CURSOR_IDENTITY_TOKEN`, with
+`CURSOR_IDENTITY_TOKEN_EXPIRES_AT` and `CURSOR_IDENTITY_NONCE`.
+
+- The chart's hook does not use the token. It unsets all three before running
+  `kubectl` and never writes them to argv, output, Pod env, annotations or
+  Secrets. No RBAC changes.
+- A custom hook verifies it before `kubectl create`: issuer
+  `https://api.cursor.com/self-hosted/claims`, keys at
+  `https://api.cursor.com/keys`, `aud` your audience, `nonce` equal to
+  `CURSOR_IDENTITY_NONCE`, `cloud_agent_id` equal to `CURSOR_BC_ID`, and
+  `worker_id` equal to `CURSOR_AGENT_WORKER_ID`.
+- Claim mode only: the chart fails the render with `controller.warmIdle > 0`
+  or `hibernation.enabled`. A wake (`CURSOR_WAKE=1`) arrives with no token.
+- The controller image needs a CLI with `--identity-audience` (version TBD).
+
+Full steps: root [README → Identity tokens](../README.md#identity-tokens-opt-in).
+
 ## Hibernation (opt-in)
 
 Off by default (`hibernation.enabled=false`), and off means the chart above
@@ -256,6 +278,7 @@ its NOTES. Walkthrough, sizing, and caveats: root
 | `auth.secretKey` | `api-key` | Key inside the Secret |
 | `auth.apiKey` | `""` | Create a Secret from this value when `existingSecret` is empty |
 | `auth.sessionToken` | `false` | Keep the key in the controller Pod; worker Pods read a per-claim token with `--auth-token-file`. Requires `controller.warmIdle=0`. See [Session tokens](#session-tokens-opt-in) |
+| `identity.audience` | `""` | Audience for a signed identity token with each claim (`--identity-audience`), passed to the spawn hook as `CURSOR_IDENTITY_TOKEN`. Empty omits the flag. Requires `controller.warmIdle=0` and hibernation off. See [Identity tokens](#identity-tokens-opt-in) |
 | `controller.enabled` | `true` | Deploy the in-cluster controller |
 | `controller.warmIdle` | `0` | `0` omits `--warm-idle` (claim mode). A positive integer is passed through as `--warm-idle` |
 | `controller.repository` | `""` | Optional `--repository` on the controller |
