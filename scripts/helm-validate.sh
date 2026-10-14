@@ -640,6 +640,22 @@ expect_fail "identity.audience without controller" \
   --set image.repository=example.local/cursor-worker --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key \
   --set identity.audience=https://sandbox.example.com --set controller.enabled=false
+# --identity-audience in controller.extraArgs skips the hook's refusal and the
+# render checks, so NOTES warn.
+for extra in "--identity-audience" "--identity-audience=https://sandbox.example.com"; do
+  helm install --dry-run=client test-release "${CHART}" \
+    --set image.repository=example.local/cursor-worker --set image.tag=test \
+    --set auth.existingSecret=cursor-workers-api-key \
+    --set "controller.extraArgs[0]=${extra}" \
+    >"${WORKDIR}/extra-identity-flag.txt"
+  file_contains "${WORKDIR}/extra-identity-flag.txt" "WARNING: controller.extraArgs passes --identity-audience"
+done
+helm install --dry-run=client test-release "${CHART}" \
+  --set image.repository=example.local/cursor-worker --set image.tag=test \
+  --set auth.existingSecret=cursor-workers-api-key \
+  --set identity.audience=https://sandbox.example.com \
+  >"${WORKDIR}/identity-notes.txt"
+file_lacks "${WORKDIR}/identity-notes.txt" "WARNING"
 
 IDENTITY_RENDER="${WORKDIR}/identity.yaml"
 helm template test-release "${CHART}" \

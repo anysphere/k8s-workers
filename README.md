@@ -765,7 +765,7 @@ Only worker Pods serve these endpoints.
 | Worker Pod stuck `ContainerCreating`, `secret "tok-…" not found` | The hook stopped between creating the Pod and its Secret. Delete the Pod and check the controller logs |
 | Controller CrashLoop, `unknown option '--identity-audience'` | The controller CLI predates identity tokens. Use a build that has the flag (version TBD), or unset `identity.audience` |
 | Render fails: `identity.audience requires controller.warmIdle=0` or `cannot be combined with hibernation.enabled` | Identity tokens come with claims only. Use claim mode with hibernation off, or unset `identity.audience` |
-| Hook logs `CURSOR_IDENTITY_TOKEN is required with identity.audience` | The controller is not running with `--identity-audience`: an older CLI, or a custom controller command |
+| Hook logs `CURSOR_IDENTITY_TOKEN is required with identity.audience` | The controller is not running with `--identity-audience`, usually because of a custom controller command. An older CLI fails earlier, on the unknown flag |
 | Hook logs `wake for … has no identity token; not spawning` | Expected: the follow-up waits out the pool's reconnect window, then arrives as a fresh claim with a token. Set the pool's `workerReadyTimeoutSeconds` to `0` to skip the wait |
 | Worker exits: `Your authentication token file is missing or invalid` or `session token expired` | The worker's claim token expired before it reconnected. Nothing refreshes a running worker's token; the next claim or wake gets a new one |
 

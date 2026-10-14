@@ -21,6 +21,15 @@ off, so every worker Pod still gets CURSOR_API_KEY. Remove the flag from
 controller.extraArgs and set auth.sessionToken=true instead.
 {{- end }}
 {{- end }}
+{{- $extraIdentity := false }}
+{{- range .Values.controller.extraArgs }}{{ if hasPrefix "--identity-audience" (toString .) }}{{ $extraIdentity = true }}{{ end }}{{ end }}
+{{- if and $extraIdentity (not .Values.identity.audience) }}
+
+WARNING: controller.extraArgs passes --identity-audience, but identity.audience
+is empty, so the spawn hook does not refuse a claim or wake without a token,
+and the warm-mode and hibernation checks are skipped. Remove the flag from
+controller.extraArgs and set identity.audience instead.
+{{- end }}
 Hibernation: {{ ternary "ON" "off (one-shot Pods, no PersistentVolumeClaims)" .Values.hibernation.enabled }}
 {{- if .Values.hibernation.enabled }}
 
