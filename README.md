@@ -478,7 +478,9 @@ Before `kubectl create`:
    - `team_id` is your team.
 4. Identify the user by `owner_user_id` or `sub`, not `owner_email`.
 5. For single use, reject a `jti` you have already seen before its `exp`.
-6. To refuse, exit non-zero without creating anything.
+6. To refuse, exit non-zero without creating anything. The controller keeps
+   holding a refused claim and does not hand it to another worker, so that
+   user's run waits several minutes and then fails.
 
 Hand the token to your verifier on stdin, not in argv, and never print it:
 the hook's stdout and stderr go to the controller log. Keep it for audit
