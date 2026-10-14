@@ -217,7 +217,7 @@ spawn hook receives it as `CURSOR_IDENTITY_TOKEN`, with
 - Claim mode only: the chart fails the render with `controller.warmIdle > 0`
   or `hibernation.enabled`. A wake (`CURSOR_WAKE=1`) still arrives, with no
   token, whenever the pool has a reconnect window.
-- The controller image needs a CLI with `--identity-audience` (version TBD).
+- The controller image needs a CLI with `--identity-audience` (`2026.10.14-941492e` has it).
 
 Full steps: root [README → Identity tokens](../README.md#identity-tokens-opt-in).
 

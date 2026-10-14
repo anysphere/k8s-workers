@@ -19,7 +19,7 @@ with `CURSOR_IDENTITY_TOKEN_EXPIRES_AT` and `CURSOR_IDENTITY_NONCE`:
   [Identity tokens](README.md#identity-tokens-opt-in).
 - Claim mode only: the chart fails the render with `controller.warmIdle > 0`
   or `hibernation.enabled`, because warm workers and wakes get no claim token.
-- Needs a controller CLI with `--identity-audience` (version TBD).
+- Needs a controller CLI with `--identity-audience` (`2026.10.14-941492e` or later).
 - If `controller.extraArgs` passes `--identity-audience` while
   `identity.audience` is empty, the install NOTES warn; set
   `identity.audience` instead.

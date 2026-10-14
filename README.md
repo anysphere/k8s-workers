@@ -441,7 +441,7 @@ carries a token. A claim that arrives without a token makes it exit 1.
 ### Turn it on
 
 1. Use a controller image whose `agent` CLI has
-   `agent worker controller --identity-audience` (version TBD).
+   `agent worker controller --identity-audience` (`2026.10.14-941492e` or later).
 2. Put the verification in your spawn hook. Clone the release tag (see
    [Install](#install)) and edit `spawn-pod.sh` in
    `chart/templates/configmap.yaml`; the `identity.audience` block marks the
@@ -763,7 +763,7 @@ Only worker Pods serve these endpoints.
 | Hook logs `CURSOR_AUTH_TOKEN is required with auth.sessionToken` | The controller is not running with `--session-token`: an older CLI, or a custom controller command |
 | Hook logs `creating Secret tok-… failed; deleting Pod …` | The controller cannot create Secrets (`rbac.create=false` without that grant, or a ResourceQuota on Secrets) |
 | Worker Pod stuck `ContainerCreating`, `secret "tok-…" not found` | The hook stopped between creating the Pod and its Secret. Delete the Pod and check the controller logs |
-| Controller CrashLoop, `unknown option '--identity-audience'` | The controller CLI predates identity tokens. Use a build that has the flag (version TBD), or unset `identity.audience` |
+| Controller CrashLoop, `unknown option '--identity-audience'` | The controller CLI predates identity tokens. Use `2026.10.14-941492e` or later, or unset `identity.audience` |
 | Render fails: `identity.audience requires controller.warmIdle=0` or `cannot be combined with hibernation.enabled` | Identity tokens come with claims only. Use claim mode with hibernation off, or unset `identity.audience` |
 | Hook logs `CURSOR_IDENTITY_TOKEN is required with identity.audience` | The controller is not running with `--identity-audience`, usually because of a custom controller command. An older CLI fails earlier, on the unknown flag |
 | Hook logs `wake for … has no identity token; not spawning` | Expected: the follow-up waits out the pool's reconnect window, then arrives as a fresh claim with a token. Set the pool's `workerReadyTimeoutSeconds` to `0` to skip the wait |
