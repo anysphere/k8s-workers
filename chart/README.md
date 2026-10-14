@@ -204,16 +204,19 @@ returns a 5-minute signed token naming the user, team, agent and worker. The
 spawn hook receives it as `CURSOR_IDENTITY_TOKEN`, with
 `CURSOR_IDENTITY_TOKEN_EXPIRES_AT` and `CURSOR_IDENTITY_NONCE`.
 
-- The chart's hook does not use the token. It unsets all three before running
-  `kubectl` and never writes them to argv, output, Pod env, annotations or
-  Secrets. No RBAC changes.
+- The chart's hook spawns nothing without a token: a wake exits 3, so the
+  reconnect window lapses into a fresh claim that carries one, and a claim
+  without one exits 1. It unsets all three before running `kubectl` and never
+  writes them to argv, output, Pod env, annotations or Secrets. No RBAC
+  changes.
 - A custom hook verifies it before `kubectl create`: issuer
   `https://api.cursor.com/self-hosted/claims`, keys at
   `https://api.cursor.com/keys`, `aud` your audience, `nonce` equal to
   `CURSOR_IDENTITY_NONCE`, `cloud_agent_id` equal to `CURSOR_BC_ID`, and
   `worker_id` equal to `CURSOR_AGENT_WORKER_ID`.
 - Claim mode only: the chart fails the render with `controller.warmIdle > 0`
-  or `hibernation.enabled`. A wake (`CURSOR_WAKE=1`) arrives with no token.
+  or `hibernation.enabled`. A wake (`CURSOR_WAKE=1`) still arrives, with no
+  token, whenever the pool has a reconnect window.
 - The controller image needs a CLI with `--identity-audience` (version TBD).
 
 Full steps: root [README → Identity tokens](../README.md#identity-tokens-opt-in).

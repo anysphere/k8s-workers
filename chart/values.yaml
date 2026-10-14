@@ -59,9 +59,10 @@ identity:
   # Audience for the signed identity token the controller requests with each
   # claim (`agent worker controller --identity-audience`). Empty omits the
   # flag. The spawn hook then receives CURSOR_IDENTITY_TOKEN,
-  # CURSOR_IDENTITY_TOKEN_EXPIRES_AT and CURSOR_IDENTITY_NONCE; the default
-  # hook drops them, and a custom hook can verify the token before it creates
-  # anything. Claim mode only: requires controller.warmIdle=0 and
+  # CURSOR_IDENTITY_TOKEN_EXPIRES_AT and CURSOR_IDENTITY_NONCE. The default
+  # hook spawns nothing without a token (a wake exits 3 and comes back as a
+  # fresh claim) and never passes it on; a custom hook can verify it before it
+  # creates anything. Claim mode only: requires controller.warmIdle=0 and
   # hibernation.enabled=false.
   audience: ""
 

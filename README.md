@@ -424,15 +424,19 @@ worker.
   | `CURSOR_IDENTITY_TOKEN_EXPIRES_AT` | When the token expires |
   | `CURSOR_IDENTITY_NONCE` | The nonce the controller sent with the claim |
 
-- The chart's own hook does not use them. It unsets all three before it runs
-  `kubectl`, and never writes them to argv, its output, Pod env, annotations
-  or Secrets. Worker Pods never see the token.
+- The chart's own hook spawns nothing without a token, and does not pass it
+  on. It unsets all three before it runs `kubectl`, and never writes them to
+  argv, its output, Pod env, annotations or Secrets. Worker Pods never see the
+  token.
 
 It works in claim mode only. A warm worker starts before any claim, and a
 wake (`CURSOR_WAKE=1`) brings back a claimed worker without a claim call, so
 neither comes with a token. The chart fails the render when
 `identity.audience` is combined with `controller.warmIdle > 0` or
-`hibernation.enabled`.
+`hibernation.enabled`. A wake can still arrive whenever the pool has a
+reconnect window (`workerReadyTimeoutSeconds > 0`). The chart's hook then
+exits 3 without spawning, so the window lapses into a fresh claim that
+carries a token. A claim that arrives without a token makes it exit 1.
 
 ### Turn it on
 
@@ -459,19 +463,22 @@ neither comes with a token. The chart fails the render when
 
 Before `kubectl create`:
 
-1. Fetch the discovery document at
+1. If `CURSOR_IDENTITY_TOKEN` is empty, refuse. On a wake (`CURSOR_WAKE=1`),
+   exit 3 so it comes back as a fresh claim with a token; keep the chart's
+   check in place.
+2. Fetch the discovery document at
    `https://api.cursor.com/self-hosted/claims/.well-known/openid-configuration`
    and the keys at `https://api.cursor.com/keys`, and cache them.
-2. Verify the RS256 signature by `kid`, then check:
+3. Verify the RS256 signature by `kid`, then check:
    - `iss` is `https://api.cursor.com/self-hosted/claims`;
    - `aud` is your `identity.audience`, and `exp` and `nbf` hold;
    - `nonce` equals `CURSOR_IDENTITY_NONCE`;
    - `cloud_agent_id` equals `CURSOR_BC_ID`, and `worker_id` equals
      `CURSOR_AGENT_WORKER_ID`;
    - `team_id` is your team.
-3. Identify the user by `owner_user_id` or `sub`, not `owner_email`.
-4. For single use, reject a `jti` you have already seen before its `exp`.
-5. To refuse, exit non-zero without creating anything.
+4. Identify the user by `owner_user_id` or `sub`, not `owner_email`.
+5. For single use, reject a `jti` you have already seen before its `exp`.
+6. To refuse, exit non-zero without creating anything.
 
 Hand the token to your verifier on stdin, not in argv, and never print it:
 the hook's stdout and stderr go to the controller log. Keep it for audit
@@ -479,10 +486,6 @@ wherever your verifier records decisions; the chart stores nothing. Claim
 tokens have their own issuer, so a system that already trusts Cursor's agent
 tokens (issuer `https://api.cursor.com`) accepts them only if you add this
 issuer to it.
-
-A wake arrives with no token. Keep the pool's `workerReadyTimeoutSeconds` at
-`0` (the default) so Cursor sends no wakes, or make your hook refuse a wake
-that has no token.
 
 ## Hibernation (opt-in)
 
@@ -760,6 +763,8 @@ Only worker Pods serve these endpoints.
 | Worker Pod stuck `ContainerCreating`, `secret "tok-…" not found` | The hook stopped between creating the Pod and its Secret. Delete the Pod and check the controller logs |
 | Controller CrashLoop, `unknown option '--identity-audience'` | The controller CLI predates identity tokens. Use a build that has the flag (version TBD), or unset `identity.audience` |
 | Render fails: `identity.audience requires controller.warmIdle=0` or `cannot be combined with hibernation.enabled` | Identity tokens come with claims only. Use claim mode with hibernation off, or unset `identity.audience` |
+| Hook logs `CURSOR_IDENTITY_TOKEN is required with identity.audience` | The controller is not running with `--identity-audience`: an older CLI, or a custom controller command |
+| Hook logs `wake for … has no identity token; not spawning` | Expected: the follow-up waits out the pool's reconnect window, then arrives as a fresh claim with a token. Set the pool's `workerReadyTimeoutSeconds` to `0` to skip the wait |
 | Worker exits: `Your authentication token file is missing or invalid` or `session token expired` | The worker's claim token expired before it reconnected. Nothing refreshes a running worker's token; the next claim or wake gets a new one |
 
 ## Differences from the deprecated operator

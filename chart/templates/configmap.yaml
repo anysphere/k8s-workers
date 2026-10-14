@@ -68,9 +68,19 @@ data:
 
     # identity.audience: the controller passes this claim's signed identity
     # token as CURSOR_IDENTITY_TOKEN, plus CURSOR_IDENTITY_TOKEN_EXPIRES_AT and
-    # CURSOR_IDENTITY_NONCE. A wake has none. This hook does not use them; a
-    # custom hook verifies the token here, before it creates anything. Unset
-    # so kubectl and anything it runs never inherit the token.
+    # CURSOR_IDENTITY_NONCE. A custom hook verifies the token here, before it
+    # creates anything. Nothing is spawned without a token: a wake has none,
+    # so it exits 3 and the reconnect window lapses into a fresh claim that
+    # carries one. The variables are unset so kubectl and anything it runs
+    # never inherit the token.
+    if [ -z "${CURSOR_IDENTITY_TOKEN:-}" ]; then
+      if [ "${WAKE}" = "1" ]; then
+        echo "spawn-pod: wake for ${WORKER_ID} has no identity token; not spawning so the reconnect window lapses into a fresh claim" >&2
+        exit 3
+      fi
+      echo "spawn-pod: CURSOR_IDENTITY_TOKEN is required with identity.audience; is the controller running with --identity-audience?" >&2
+      exit 1
+    fi
     unset CURSOR_IDENTITY_TOKEN CURSOR_IDENTITY_TOKEN_EXPIRES_AT CURSOR_IDENTITY_NONCE
     {{- end }}
     {{- if .Values.auth.sessionToken }}

@@ -11,9 +11,10 @@ and the controller runs `agent worker controller --identity-audience
 team, agent and worker. The spawn hook receives it as `CURSOR_IDENTITY_TOKEN`,
 with `CURSOR_IDENTITY_TOKEN_EXPIRES_AT` and `CURSOR_IDENTITY_NONCE`:
 
-- The default hook does not use the token. It unsets all three before it runs
-  `kubectl`, and never writes them to argv, output, Pod env, annotations or
-  Secrets.
+- The default hook spawns nothing without a token. A wake carries none, so it
+  exits 3 and the reconnect window lapses into a fresh claim that carries one;
+  a claim without one exits 1. It unsets all three before it runs `kubectl`,
+  and never writes them to argv, output, Pod env, annotations or Secrets.
 - A custom hook can verify the token before it creates anything. See
   [Identity tokens](README.md#identity-tokens-opt-in).
 - Claim mode only: the chart fails the render with `controller.warmIdle > 0`

@@ -681,9 +681,16 @@ run_hook "identity/claim" "${WORKDIR}/hooks-identity" "${WORKDIR}/identity-claim
 file_contains "${WORKDIR}/identity-claim/created-1.yaml" "kind: Pod"
 id_secrets_absent "${WORKDIR}/identity-claim"
 
-# A wake carries no identity token; the default hook spawns as usual.
-run_hook "identity/wake" "${WORKDIR}/hooks-identity" "${WORKDIR}/identity-wake" CURSOR_WAKE=1
-[ "$(created_count "${WORKDIR}/identity-wake")" = "1" ] || { echo "identity/wake must create only the Pod" >&2; exit 1; }
+# Nothing is spawned without a token. A wake carries none, so it exits 3 and
+# the window lapses into a fresh claim; a claim without one exits 1.
+expect_hook_fail "identity/wake" "${WORKDIR}/hooks-identity" "${WORKDIR}/identity-wake" 3 CURSOR_WAKE=1
+file_contains "${WORKDIR}/identity-wake/hook.out" "has no identity token; not spawning"
+[ ! -e "${WORKDIR}/identity-wake/argv.log" ] || { echo "identity/wake must not call kubectl" >&2; exit 1; }
+expect_hook_fail "identity/no-token" "${WORKDIR}/hooks-identity" "${WORKDIR}/identity-no-token" 1
+file_contains "${WORKDIR}/identity-no-token/hook.out" "CURSOR_IDENTITY_TOKEN is required with identity.audience"
+expect_hook_fail "identity/empty-token" "${WORKDIR}/hooks-identity" "${WORKDIR}/identity-empty-token" 1 \
+  CURSOR_IDENTITY_TOKEN= CURSOR_IDENTITY_NONCE="${ID_NONCE}"
+file_lacks "${WORKDIR}/identity-empty-token/hook.out" "${ID_NONCE}"
 
 # With session tokens too, only the session token goes into the Pod's Secret.
 helm template test-release "${CHART}" \
