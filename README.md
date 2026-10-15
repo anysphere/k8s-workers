@@ -34,6 +34,7 @@ lists what changes when you move over.
 | One-shot Pods | `restartPolicy: Never` — idle exit completes the Pod; next spawn creates a new one |
 | Claim or warm | `controller.warmIdle=0` claim-then-spawn, or `>0` for `--warm-idle N` |
 | Worker auth | Long-lived `CURSOR_API_KEY` from a Secret in every worker Pod by default. With `auth.sessionToken=true`, only the controller holds the key and each worker gets a token for its own claim. See [Session tokens](#session-tokens-opt-in) |
+| Identity token | **Off by default.** With `identity.audience`, each claim comes with a signed token naming the user, for your spawn hook to verify before it creates anything. See [Identity tokens](#identity-tokens-opt-in) |
 | No CRD | Installs no CRD or `WorkerDeployment`, so it can share a cluster with an existing operator install |
 | Hibernation | **Off by default.** Opt in with `hibernation.enabled=true` plus a pool reconnect window to keep a per-worker workspace volume across idle exits. See [Hibernation](#hibernation-opt-in) |
 
@@ -193,7 +194,7 @@ controller Deployment so a rollout keeps a single controller.
 
 The chart is published to Amazon ECR Public at
 `oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers`, and installing it needs no
-registry login. These steps pin `0.2.2`; replace it with the newest version on
+registry login. These steps pin `0.2.4`; replace it with the newest version on
 the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
 1. Create a namespace and store the service account API key.
@@ -210,7 +211,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.2 \
+     --version 0.2.4 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -227,7 +228,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.2 \
+     --version 0.2.4 \
      --namespace cursord \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -241,7 +242,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.2 \
+     --version 0.2.4 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -260,14 +261,14 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
    (see [Run a cloud agent](#run-a-cloud-agent) below).
 
 To change the spawn hook or templates, clone the repository at the release tag
-(`git clone --branch v0.2.2 https://github.com/anysphere/k8s-workers.git`) and
+(`git clone --branch v0.2.4 https://github.com/anysphere/k8s-workers.git`) and
 install `./chart` in place of the OCI reference.
 
 Render without installing:
 
 ```bash
 helm template my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.2 \
+  --version 0.2.4 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key
@@ -363,7 +364,7 @@ give it, and the chart fails the render if you combine the two.
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.2 \
+     --version 0.2.4 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -404,6 +405,89 @@ install NOTES print a warning when `controller.extraArgs` contains it.
   otherwise delete them as shown in [Monitoring](#monitoring).
 - It combines with [hibernation](#hibernation-opt-in): each wake mounts the
   same workspace claim into a new Pod with a new token Secret.
+
+## Identity tokens (opt-in)
+
+A spawn hook can confirm who started an agent before it creates anything for
+that user. Set `identity.audience` and the controller requests a signed
+identity token with every claim and passes it to the spawn hook. The token is
+an RS256 JWT, valid for 5 minutes, that names the user, team, agent and
+worker.
+
+- The controller runs `agent worker controller --identity-audience <audience>`
+  and sends that audience and a fresh nonce with each claim.
+- The spawn hook receives:
+
+  | Variable | Value |
+  | --- | --- |
+  | `CURSOR_IDENTITY_TOKEN` | The signed token for this claim |
+  | `CURSOR_IDENTITY_TOKEN_EXPIRES_AT` | When the token expires |
+  | `CURSOR_IDENTITY_NONCE` | The nonce the controller sent with the claim |
+
+- The chart's own hook spawns nothing without a token, and does not pass it
+  on. It unsets all three before it runs `kubectl`, and never writes them to
+  argv, its output, Pod env, annotations or Secrets. Worker Pods never see the
+  token.
+
+It works in claim mode only. A warm worker starts before any claim, and a
+wake (`CURSOR_WAKE=1`) brings back a claimed worker without a claim call, so
+neither comes with a token. The chart fails the render when
+`identity.audience` is combined with `controller.warmIdle > 0` or
+`hibernation.enabled`. A wake can still arrive whenever the pool has a
+reconnect window (`workerReadyTimeoutSeconds > 0`). The chart's hook then
+exits 3 without spawning, so the window lapses into a fresh claim that
+carries a token. A claim that arrives without a token makes it exit 1.
+
+### Turn it on
+
+1. Use a controller image whose `agent` CLI has
+   `agent worker controller --identity-audience` (`2026.10.14-941492e` or later).
+2. Put the verification in your spawn hook. Clone the release tag (see
+   [Install](#install)) and edit `spawn-pod.sh` in
+   `chart/templates/configmap.yaml`; the `identity.audience` block marks the
+   spot, before anything is created.
+3. Install or upgrade with your audience:
+
+   ```bash
+   helm upgrade --install my-workers ./chart \
+     --namespace cursord --create-namespace \
+     --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
+     --set image.tag=YOUR_TAG \
+     --set pool=k8s-workers \
+     --set controller.warmIdle=0 \
+     --set auth.existingSecret=cursor-workers-api-key \
+     --set identity.audience=YOUR_AUDIENCE
+   ```
+
+### Verify the token in your hook
+
+Before `kubectl create`:
+
+1. If `CURSOR_IDENTITY_TOKEN` is empty, refuse. On a wake (`CURSOR_WAKE=1`),
+   exit 3 so it comes back as a fresh claim with a token; keep the chart's
+   check in place.
+2. Fetch the discovery document at
+   `https://api.cursor.com/self-hosted/claims/.well-known/openid-configuration`
+   and the keys at `https://api.cursor.com/keys`, and cache them.
+3. Verify the RS256 signature by `kid`, then check:
+   - `iss` is `https://api.cursor.com/self-hosted/claims`;
+   - `aud` is your `identity.audience`, and `exp` and `nbf` hold;
+   - `nonce` equals `CURSOR_IDENTITY_NONCE`;
+   - `cloud_agent_id` equals `CURSOR_BC_ID`, and `worker_id` equals
+     `CURSOR_AGENT_WORKER_ID`;
+   - `team_id` is your team.
+4. Identify the user by `owner_user_id` or `sub`, not `owner_email`.
+5. For single use, reject a `jti` you have already seen before its `exp`.
+6. To refuse, exit non-zero without creating anything. The controller keeps
+   holding a refused claim and does not hand it to another worker, so that
+   user's run waits several minutes and then fails.
+
+Hand the token to your verifier on stdin, not in argv, and never print it:
+the hook's stdout and stderr go to the controller log. Keep it for audit
+wherever your verifier records decisions; the chart stores nothing. Claim
+tokens have their own issuer, so a system that already trusts Cursor's agent
+tokens (issuer `https://api.cursor.com`) accepts them only if you add this
+issuer to it.
 
 ## Hibernation (opt-in)
 
@@ -461,7 +545,7 @@ Cursor-managed hibernation snapshots memory; this does not.
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.2 \
+     --version 0.2.4 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -679,6 +763,10 @@ Only worker Pods serve these endpoints.
 | Hook logs `CURSOR_AUTH_TOKEN is required with auth.sessionToken` | The controller is not running with `--session-token`: an older CLI, or a custom controller command |
 | Hook logs `creating Secret tok-… failed; deleting Pod …` | The controller cannot create Secrets (`rbac.create=false` without that grant, or a ResourceQuota on Secrets) |
 | Worker Pod stuck `ContainerCreating`, `secret "tok-…" not found` | The hook stopped between creating the Pod and its Secret. Delete the Pod and check the controller logs |
+| Controller CrashLoop, `unknown option '--identity-audience'` | The controller CLI predates identity tokens. Use `2026.10.14-941492e` or later, or unset `identity.audience` |
+| Render fails: `identity.audience requires controller.warmIdle=0` or `cannot be combined with hibernation.enabled` | Identity tokens come with claims only. Use claim mode with hibernation off, or unset `identity.audience` |
+| Hook logs `CURSOR_IDENTITY_TOKEN is required with identity.audience` | The controller is not running with `--identity-audience`, usually because of a custom controller command. An older CLI fails earlier, on the unknown flag |
+| Hook logs `wake for … has no identity token; not spawning` | Expected: the follow-up waits out the pool's reconnect window, then arrives as a fresh claim with a token. Set the pool's `workerReadyTimeoutSeconds` to `0` to skip the wait |
 | Worker exits: `Your authentication token file is missing or invalid` or `session token expired` | The worker's claim token expired before it reconnected. Nothing refreshes a running worker's token; the next claim or wake gets a new one |
 
 ## Differences from the deprecated operator

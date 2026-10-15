@@ -208,6 +208,17 @@ Required calls are assigned so this helper emits no YAML.
 {{- fail "auth.sessionToken requires controller.warmIdle=0. A session token serves one claim, and warm workers start before any claim." -}}
 {{- end -}}
 {{- end -}}
+{{- if .Values.identity.audience -}}
+{{- if not .Values.controller.enabled -}}
+{{- fail "identity.audience requires controller.enabled=true (the controller requests the identity token with each claim)." -}}
+{{- end -}}
+{{- if gt $warmIdle 0 -}}
+{{- fail "identity.audience requires controller.warmIdle=0. The identity token comes with a claim, and warm workers start before any claim." -}}
+{{- end -}}
+{{- if .Values.hibernation.enabled -}}
+{{- fail "identity.audience cannot be combined with hibernation.enabled. A wake brings back a claimed worker without a claim call, so it arrives with no identity token." -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.hibernation.enabled -}}
 {{- if not .Values.controller.enabled -}}
 {{- fail "hibernation.enabled requires controller.enabled=true (the spawn hook creates and mounts the workspace PVCs)." -}}
