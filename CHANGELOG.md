@@ -3,6 +3,20 @@
 Each release is a git tag named `v<version>`. While the chart is 0.x, a minor
 release can need action from you, and its entry says what.
 
+## 0.2.5
+
+New optional values `runtimeClassName`, `controller.nodeSelector` and
+`controller.tolerations`; defaults render identical resources. No action
+needed.
+
+- `runtimeClassName` sets `runtimeClassName` on spawned worker Pods, for
+  sandboxed runtimes such as GKE Sandbox (gVisor) or Kata. The worker Pod
+  manifest lives inside the spawn ConfigMap, so it could not be patched from
+  outside the chart.
+- `controller.nodeSelector` and `controller.tolerations` place the controller
+  Pod. The top-level `nodeSelector` and `tolerations` still apply to worker
+  Pods only.
+
 ## 0.2.4
 
 Opt-in claim identity tokens with `identity.audience` (default empty). Set it

@@ -1,7 +1,7 @@
 apiVersion: v2
 name: k8s-workers
-version: 0.2.4
-appVersion: "0.2.4"
+version: 0.2.5
+appVersion: "0.2.5"
 type: application
 description: Runs Cursor self-hosted pool workers as one-shot Pods spawned by agent worker controller.
   Replaces the deprecated worker-set-controller-chart / WorkerDeployment operator.

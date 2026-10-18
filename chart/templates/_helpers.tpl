@@ -376,6 +376,9 @@ metadata:
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false
+  {{- with .Values.runtimeClassName }}
+  runtimeClassName: {{ . | quote }}
+  {{- end }}
   terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
   {{- with .Values.priorityClassName }}
   priorityClassName: {{ . | quote }}

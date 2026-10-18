@@ -287,8 +287,11 @@ its NOTES. Walkthrough, sizing, and caveats: root
 | `controller.repository` | `""` | Optional `--repository` on the controller |
 | `controller.endpoint` | `""` | Optional controller `CURSOR_API_ENDPOINT` override |
 | `controller.image.*` | empty | Optional controller image (`agent` + `kubectl`) |
+| `controller.nodeSelector` | `{}` | `nodeSelector` on the controller Pod. The top-level `nodeSelector` applies to worker Pods only |
+| `controller.tolerations` | `[]` | `tolerations` on the controller Pod. The top-level `tolerations` applies to worker Pods only |
 | `rbac.create` | `true` | Role/RoleBinding for Pod create (plus PVCs with hibernation, Secret create and Pod delete with `auth.sessionToken`) |
 | `resources` | 250m / 512Mi request, 2Gi memory limit | Spawned **worker** Pod resources |
+| `runtimeClassName` | `""` | `runtimeClassName` on spawned worker Pods (for example `gvisor` for GKE Sandbox). The RuntimeClass must exist. Empty omits the field |
 | `podSecurityContext` | `{}` | Pod `securityContext`. Set `fsGroup` to the image user's gid when hibernation mounts a volume and that user is not root |
 | `probes.readiness.path` | `/readyz` | Readiness HTTP path on worker Pods |
 | `probes.liveness.path` | `/healthz` | Liveness HTTP path on worker Pods |
