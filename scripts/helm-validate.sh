@@ -727,6 +727,36 @@ run_hook "identity+session/claim" "${WORKDIR}/hooks-identity-session" "${WORKDIR
 file_contains "${WORKDIR}/identity-session-claim/created-2.yaml" "token: \"${TOKEN}\""
 id_secrets_absent "${WORKDIR}/identity-session-claim"
 
+# ---------------------------------------------------------------------------
+# Runtime class and controller scheduling. Defaults render none of the fields.
+must_not_contain "runtimeClassName"
+must_not_contain "nodeSelector"
+must_not_contain "tolerations"
+
+SCHED_DEPLOY="${WORKDIR}/sched-deployment.yaml"
+SCHED_SPAWN="${WORKDIR}/sched-configmap.yaml"
+sched_args=(
+  --set image.repository=example.local/cursor-worker
+  --set image.tag=test
+  --set auth.existingSecret=cursor-workers-api-key
+  --set runtimeClassName=gvisor
+  --set controller.nodeSelector.pool=controllers
+  --set controller.tolerations[0].key=dedicated
+  --set controller.tolerations[0].operator=Equal
+  --set controller.tolerations[0].value=controllers
+  --set controller.tolerations[0].effect=NoSchedule
+)
+helm template test-release "${CHART}" "${sched_args[@]}" \
+  --show-only templates/deployment.yaml >"${SCHED_DEPLOY}"
+helm template test-release "${CHART}" "${sched_args[@]}" \
+  --show-only templates/configmap.yaml >"${SCHED_SPAWN}"
+file_contains "${SCHED_SPAWN}" 'runtimeClassName: "gvisor"'
+file_lacks "${SCHED_SPAWN}" "controllers"
+file_lacks "${SCHED_DEPLOY}" "runtimeClassName"
+file_contains "${SCHED_DEPLOY}" "pool: controllers"
+file_contains "${SCHED_DEPLOY}" "key: dedicated"
+file_contains "${SCHED_DEPLOY}" "effect: NoSchedule"
+
 # Controller enabled is the default; an explicit true must still render.
 helm template test-release "${CHART}" \
   --set image.repository=example.local/cursor-worker \

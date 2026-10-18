@@ -96,6 +96,10 @@ controller:
       memory: 128Mi
     limits:
       memory: 512Mi
+  # Scheduling for the controller Pod only. The top-level nodeSelector and
+  # tolerations apply to spawned worker Pods, not the controller.
+  nodeSelector: {}
+  tolerations: []
 
 # Per-worker workspace volume across idle exits. Off by default. Also needs a
 # non-zero workerReadyTimeoutSeconds on the pool; NOTES.txt prints the call.
@@ -195,6 +199,9 @@ securityContext: {}
 
 terminationGracePeriodSeconds: 30
 priorityClassName: ""
+# RuntimeClass for spawned worker Pods (for example `gvisor` for GKE Sandbox,
+# or a Kata class). The class must exist in the cluster. Empty omits the field.
+runtimeClassName: ""
 nodeSelector: {}
 tolerations: []
 affinity: {}

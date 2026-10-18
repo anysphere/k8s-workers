@@ -99,4 +99,12 @@ spec:
           configMap:
             name: {{ include "cursor-worker-pool.spawnConfigMapName" . }}
             defaultMode: 0755
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}
