@@ -4,7 +4,7 @@ Step-by-step install, any-repo vs repo-bound, and claim vs warm-idle modes:
 see the root [README.md](../README.md).
 
 Deploys an in-cluster `agent worker controller` that kubectl-creates Cursor
-self-hosted **pool** workers as vanilla Kubernetes **Pods**.
+self-hosted **pool** workers as plain Kubernetes **Pods**.
 
 This chart replaces the deprecated `worker-set-controller` operator. It installs
 no CRD and no `WorkerDeployment`, so it can share a cluster with an existing
