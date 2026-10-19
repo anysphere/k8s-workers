@@ -1,6 +1,6 @@
 # Run Cursor cloud agents on Kubernetes
 
-This template runs Cursor Self-Hosted Machines (self-hosted pool) workers in
+This chart runs Cursor Self-Hosted Machines (self-hosted pool) workers in
 your cluster. Cursor hosts the agent loop. An in-cluster
 `agent worker controller` kubectl-creates one worker Pod per spawn; each
 worker runs tool calls inside your cluster network.
