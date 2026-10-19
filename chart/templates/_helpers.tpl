@@ -275,6 +275,7 @@ Worker CLI arguments shared by the plain and hibernation Pod shapes.
 {{- end }}
 - --management-addr
 - {{ .Values.managementAddr | quote }}
+- --connect-workspace
 {{- if .Values.auth.sessionToken }}
 - --auth-token-file
 - {{ include "cursor-worker-pool.tokenFile" . | quote }}

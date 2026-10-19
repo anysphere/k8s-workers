@@ -41,13 +41,14 @@ value is shared with spawned workers.
 
 ## Quick start
 
-Your worker image must include the `agent` CLI, `git` on `PATH`, and a
-workspace at `workerDir` (see [Prerequisites](../README.md#prerequisites)).
-The controller container additionally needs `kubectl`.
+Your worker image must include the `agent` CLI (`2026.09.15-d2fe57e` or
+later), `git` on `PATH`, and a workspace at `workerDir` (see
+[Prerequisites](../README.md#prerequisites)). The controller container
+additionally needs `kubectl`.
 
 The chart is published to Amazon ECR Public at
 `oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers`, and installing it needs no
-registry login. Replace `0.2.4` below with the version you want from the
+registry login. Replace `0.3.0` below with the version you want from the
 [releases page](https://github.com/anysphere/k8s-workers/releases).
 
 ### Existing Secret
@@ -58,7 +59,7 @@ kubectl create secret generic cursor-workers-api-key \
   -n cursord
 
 helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.4 \
+  --version 0.3.0 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -71,7 +72,7 @@ helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-worke
 
 ```bash
 helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.4 \
+  --version 0.3.0 \
   --namespace cursord --create-namespace \
   --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
   --set image.tag=YOUR_TAG \
@@ -85,7 +86,7 @@ Render without installing:
 
 ```bash
 helm template my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.4 \
+  --version 0.3.0 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=sample \
   --set auth.existingSecret=cursor-workers-api-key
@@ -112,6 +113,12 @@ runs `kubectl create -f -` with a Pod spec:
    (`https://api2.cursor.sh`). The controller default (`https://api.cursor.com`)
    is for `/v0/private-workers`. Set `controller.endpoint` to override the
    controller process.
+5. The worker always runs with `--connect-workspace`, so Cursor can connect
+   to the agent's live workspace (files, changes, terminal, ports) through
+   `cursor-server` on `127.0.0.1` in the Pod. Agents open as trusted
+   workspaces. There is no value to turn it off; it needs CLI
+   `2026.09.15-d2fe57e` or later in the worker image. See
+   [Live workspace](../README.md#live-workspace).
 
 The hook substitutes exactly three tokens (`${WORKER_SLUG}`, `${WORKER_ID}`,
 `${POOL}`) into the manifests with `sed`, after validating each to a safe

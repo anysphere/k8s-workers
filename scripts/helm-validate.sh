@@ -94,6 +94,7 @@ must_contain "gpu"
 must_contain "--idle-release-timeout"
 must_contain "--worker-dir"
 must_contain "--management-addr"
+must_contain "--connect-workspace"
 must_contain "--label"
 must_contain "team=backend"
 must_contain "CURSOR_API_KEY"
@@ -264,6 +265,15 @@ expect_hook_fail() { # label hooks_dir mock_dir expected_exit [ENV=val ...]
 created_count() { ls "$1" | grep -c '^created-' || true; }
 file_contains() { grep -F -- "$2" "$1" >/dev/null || { echo "$1 missing: $2" >&2; exit 1; }; }
 file_lacks() { if grep -F -- "$2" "$1" >/dev/null; then echo "$1 should not contain: $2" >&2; exit 1; fi; }
+flag_before_start() {
+  local flag_line start_line
+  flag_line="$(grep -n -F -- "- $2" "$1" | head -n 1 | cut -d: -f1)"
+  start_line="$(grep -n -E -- '^ *- start$' "$1" | head -n 1 | cut -d: -f1)"
+  if [ -z "${flag_line}" ] || [ -z "${start_line}" ] || [ "${flag_line}" -ge "${start_line}" ]; then
+    echo "$1: $2 must come before start" >&2
+    exit 1
+  fi
+}
 
 extract_hooks "${RENDER}" "${WORKDIR}/hooks-off"
 for k in spawn-pod.sh worker-pod.yaml; do
@@ -290,6 +300,7 @@ file_lacks "${SPAWNED}" "https://api.cursor.com"
 file_lacks "${SPAWNED}" "kind: Deployment"
 file_lacks "${SPAWNED}" "persistentVolumeClaim"
 file_lacks "${SPAWNED}" "entrypoint.sh"
+flag_before_start "${SPAWNED}" "--connect-workspace"
 [ ! -e "${WORKDIR}/off-nowake/annotate.log" ] || { echo "off mode must not annotate" >&2; exit 1; }
 
 # Hibernation off, wake: a fresh Pod with the claimed id and no volume.
@@ -413,6 +424,7 @@ file_contains "${HIB_POD}" "/cursor-hooks/entrypoint.sh"
 file_contains "${HIB_POD}" "test-release-k8s-workers-spawn"
 grep -F -A1 -- "args:" "${HIB_POD}" | grep -F -- "- agent" >/dev/null \
   || { echo "hibernation Pod must pass the command through the entrypoint args" >&2; exit 1; }
+flag_before_start "${HIB_POD}" "--connect-workspace"
 file_contains "${WORKDIR}/on-nowake-missing/annotate.log" "pvc ws-${WORKER_ID} --overwrite cursor.com/last-used-at="
 file_contains "${WORKDIR}/on-nowake-missing/annotate.log" "cursor.com/last-used-epoch="
 

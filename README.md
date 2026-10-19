@@ -21,7 +21,8 @@ lists what changes when you move over.
    `agent worker controller --spawn /hooks/spawn-pod.sh --pool <name>`.
 3. On each `--spawn`, the hook runs `kubectl create -f -` for a Pod with
    `restartPolicy: Never`. That Pod starts
-   `agent worker --pool <name> --worker-dir <dir> start`.
+   `agent worker --pool <name> --worker-dir <dir> --connect-workspace start`
+   (see [Live workspace](#live-workspace)).
 4. The worker opens an outbound bridge to Cursor and executes tool calls in
    your cluster. When `--idle-release-timeout` elapses after the session, the
    worker exits 0 and the Pod becomes **Succeeded**.
@@ -90,7 +91,7 @@ single controller should serve several pools.
 Worker Pod (spawned by the hook):
 
 ```bash
-agent worker --pool <name> --worker-dir /workspace start
+agent worker --pool <name> --worker-dir /workspace --connect-workspace start
 ```
 
 `/workspace` should have no git remote so the worker leaves off `repo=`
@@ -174,12 +175,14 @@ controller Deployment so a rollout keeps a single controller.
 - A [service account API key](https://cursor.com/docs/account/enterprise/service-accounts)
   for pool workers (personal API keys are rejected)
 - A worker container image that includes:
-  - the `agent` / `cursor-agent` CLI. Warm reconcile parses
-    `GET /v0/private-workers/pools`, including `workerReadyTimeoutSeconds`.
-    `2026.09.03-a76a283` accepts that field. If the image does not bake the
-    binary, download the [cursor.com/install](https://cursor.com/install)
-    build in the container `command` before exec. The chart uses the same
-    `command` for the controller and for spawned workers.
+  - the `agent` / `cursor-agent` CLI, `2026.09.15-d2fe57e` or later. Worker
+    Pods start with `--connect-workspace`, and older CLIs reject that flag
+    and exit. Warm reconcile also parses `GET /v0/private-workers/pools`,
+    including `workerReadyTimeoutSeconds`, which `2026.09.03-a76a283` and
+    later accept. If the image does not bake the binary, download the
+    [cursor.com/install](https://cursor.com/install) build in the container
+    `command` before exec. The chart uses the same `command` for the
+    controller and for spawned workers.
   - `git` on `PATH` (required for git remotes / `--clone-git-repos`)
   - a workspace directory at `workerDir` (default `/workspace`)
   - `/bin/sh` if you turn on [hibernation](#hibernation-opt-in) (the
@@ -194,7 +197,7 @@ controller Deployment so a rollout keeps a single controller.
 
 The chart is published to Amazon ECR Public at
 `oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers`, and installing it needs no
-registry login. These steps pin `0.2.4`; replace it with the newest version on
+registry login. These steps pin `0.3.0`; replace it with the newest version on
 the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
 1. Create a namespace and store the service account API key.
@@ -211,7 +214,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.4 \
+     --version 0.3.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -228,7 +231,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.4 \
+     --version 0.3.0 \
      --namespace cursord \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -242,7 +245,7 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.4 \
+     --version 0.3.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -261,14 +264,14 @@ the [releases page](https://github.com/anysphere/k8s-workers/releases).
    (see [Run a cloud agent](#run-a-cloud-agent) below).
 
 To change the spawn hook or templates, clone the repository at the release tag
-(`git clone --branch v0.2.4 https://github.com/anysphere/k8s-workers.git`) and
+(`git clone --branch v0.3.0 https://github.com/anysphere/k8s-workers.git`) and
 install `./chart` in place of the OCI reference.
 
 Render without installing:
 
 ```bash
 helm template my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-  --version 0.2.4 \
+  --version 0.3.0 \
   --set image.repository=example.local/cursor-worker \
   --set image.tag=test \
   --set auth.existingSecret=cursor-workers-api-key
@@ -332,6 +335,31 @@ For a first walkthrough without private git auth, bake
 `https://github.com/octocat/Hello-World` into the image workspace, then
 replace it with your real repository before production work.
 
+## Live workspace
+
+Every worker Pod starts with `agent worker --connect-workspace`. With it,
+Cursor can connect to the live workspace of an agent that runs on the worker:
+its files, changes, terminal and ports. The worker does this by starting
+`cursor-server` inside the Pod, listening on `127.0.0.1` only. Editor traffic
+goes over the worker's existing outbound connection to Cursor, so the Pod
+needs no inbound ports or Service. The chart has no value to turn it off.
+
+- **Trusted workspaces.** Agents on these workers open in Cursor as trusted
+  workspaces. Tasks and settings configured in the repository, including tasks
+  that run when the workspace opens, run as the worker's OS user for anyone
+  with VM access to the agent, teammates included when your team has VM
+  sharing on.
+- **Download host.** Nothing is downloaded until Cursor allows a session. Then
+  the worker downloads the `cursor-server` build that matches the Cursor app
+  opening the agent from `https://cursor.blob.core.windows.net` to
+  `~/.cursor-server/bin/<commit>/` in the worker user's home directory. With
+  restricted egress, allow outbound HTTPS to that host; there is no mirror.
+  The home directory must be writable.
+- **Linux only.** `cursor-server` runs on Linux, which is what worker Pods run.
+- **CLI version.** The worker image needs an `agent` CLI that accepts the flag,
+  `2026.09.15-d2fe57e` or later. An older CLI exits at startup with
+  `error: unknown option '--connect-workspace'`.
+
 ## Session tokens (opt-in)
 
 By default every worker Pod gets the team service account key as
@@ -364,7 +392,7 @@ give it, and the chart fails the render if you combine the two.
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.4 \
+     --version 0.3.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -545,7 +573,7 @@ Cursor-managed hibernation snapshots memory; this does not.
 
    ```bash
    helm upgrade --install my-workers oci://public.ecr.aws/k0i0n2g5/charts/k8s-workers \
-     --version 0.2.4 \
+     --version 0.3.0 \
      --namespace cursord --create-namespace \
      --set image.repository=YOUR_REGISTRY/YOUR_WORKER_IMAGE \
      --set image.tag=YOUR_TAG \
@@ -744,6 +772,7 @@ Only worker Pods serve these endpoints.
 | Nothing is ever claimed | Controller logs; `CURSOR_API_KEY` Secret; `pool` matches the dashboard; Self-Hosted enabled for the team |
 | `HTTP 401` / invalid API key | Use a **service account** key with agent scope, not a personal key |
 | Pods spawn then exit immediately | Image has `agent` + `git`; `workerDir` exists; check worker logs |
+| Worker Pod exits at start: `unknown option '--connect-workspace'` | The worker image's CLI is older than `2026.09.15-d2fe57e`. Update the CLI in the image, or install the current build in `command` |
 | Agent cannot find the pool under a repo | You started any-repo (no `repo=` labels). Pick **Any repo**, or bake a git remote for repo-bound |
 | Pool missing from the web UI | Register a named pool (`POST /v0/private-workers/pools`, no repo fields) and set Helm `pool` to that name. `default` is the unnamed pool; a repo-backed `default` pool shows under its repository |
 | `unrecognized_keys` / `workerReadyTimeoutSeconds` | Controller CLI is older than the pools response. Use a build that accepts that field (`2026.09.03-a76a283` does) |

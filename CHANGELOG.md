@@ -3,6 +3,27 @@
 Each release is a git tag named `v<version>`. While the chart is 0.x, a minor
 release can need action from you, and its entry says what.
 
+## 0.3.0
+
+Worker Pods now always start with `--connect-workspace`, so Cursor can connect
+to the live workspace of an agent running on the worker: its files, changes,
+terminal and ports, through `cursor-server` on the Pod's loopback interface.
+Agents on these workers open as trusted workspaces. There is no value to turn
+it off. See [Live workspace](README.md#live-workspace) for the trade-off and
+the `cursor-server` download host.
+
+Action needed: the worker image's `agent` CLI must be `2026.09.15-d2fe57e` or
+later. An older CLI rejects the flag with
+`error: unknown option '--connect-workspace'` and the worker Pod exits at
+startup. An image that installs the current
+[cursor.com/install](https://cursor.com/install) build in `command` already
+meets this.
+
+The only other change to the rendered resources is the version labels. The
+spawn ConfigMap changes, so the upgrade restarts the controller Pod once.
+Worker Pods that are already running keep running with their old arguments;
+Pods spawned after the upgrade get the flag.
+
 ## 0.2.4
 
 Opt-in claim identity tokens with `identity.audience` (default empty). Set it
